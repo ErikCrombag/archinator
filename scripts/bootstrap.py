@@ -121,7 +121,11 @@ def _detect_view_ref(text: str) -> str | None:
     return f"View {m.group(1)}" if m else None
 
 
-def build_rag_index(pdf_path: Path, extra_urls: list[str] | None = None) -> None:
+def build_rag_index(
+    pdf_path: Path,
+    extra_urls: list[str] | None = None,
+    extra_pdfs: list[str] | None = None,
+) -> None:
     """
     Chunk and embed:
       - All pages of the PDF (not keyword-filtered — LLM query handles relevance)
@@ -221,6 +225,40 @@ def build_rag_index(pdf_path: Path, extra_urls: list[str] | None = None) -> None
             progress.advance(task)
 
     doc.close()
+
+    # ── Extra PDFs (local paths or URLs) ─────────────────────────────────────
+    import tempfile
+    for pdf_src in (extra_pdfs or []):
+        if pdf_src.startswith("http://") or pdf_src.startswith("https://"):
+            console.print(f"[cyan]Downloading extra PDF:[/cyan] {pdf_src}")
+            with httpx.Client(timeout=120, follow_redirects=True) as dl:
+                r = dl.get(pdf_src)
+                r.raise_for_status()
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                tmp.write(r.content)
+                extra_pdf_path = Path(tmp.name)
+            label = pdf_src.split("/")[-1]
+        else:
+            extra_pdf_path = Path(pdf_src)
+            label = extra_pdf_path.name
+
+        console.print(f"[cyan]Indexing extra PDF:[/cyan] {label}")
+        extra_doc = fitz.open(str(extra_pdf_path))
+        for page_num in range(len(extra_doc)):
+            text = extra_doc[page_num].get_text().strip()
+            if not text:
+                continue
+            view_ref = _detect_view_ref(text)
+            words = text.split()
+            for i in range(0, max(1, len(words) - OVERLAP_WORDS), CHUNK_WORDS - OVERLAP_WORDS):
+                chunk = " ".join(words[i : i + CHUNK_WORDS])
+                meta: dict = {"source": label, "page": page_num + 1, "kind": "book"}
+                if view_ref:
+                    meta["view_ref"] = view_ref
+                add_chunk(chunk, meta, f"extpdf:{label}:p{page_num}:w{i}")
+        extra_doc.close()
+
+    flush()
 
     # ── Web sources ───────────────────────────────────────────────────────────
     all_web = list(WEB_SOURCES)
@@ -380,6 +418,8 @@ def review_draft() -> bool:
 @click.option("--ollama-model", default="llama3.3", show_default=True)
 @click.option("--extra-url", "extra_urls", multiple=True,
               help="Additional URLs to crawl and index (repeatable)")
+@click.option("--extra-pdf", "extra_pdfs", multiple=True,
+              help="Additional PDFs to index — local path or URL (repeatable)")
 @click.option("--index-only", is_flag=True, default=False,
               help="Only build RAG index; skip guidance extraction")
 @click.option("--guidance-only", is_flag=True, default=False,
@@ -391,6 +431,7 @@ def main(
     ollama_url: str,
     ollama_model: str,
     extra_urls: tuple[str, ...],
+    extra_pdfs: tuple[str, ...],
     index_only: bool,
     guidance_only: bool,
     skip_review: bool,
@@ -404,7 +445,7 @@ def main(
 
     # ── Phase 1: RAG index ────────────────────────────────────────────────────
     if not guidance_only:
-        build_rag_index(pdf, list(extra_urls))
+        build_rag_index(pdf, list(extra_urls), list(extra_pdfs))
 
     # ── Phase 2: Guidance extraction ──────────────────────────────────────────
     if not index_only:
