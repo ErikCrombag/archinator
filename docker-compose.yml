@@ -34,7 +34,7 @@ services:
     build: ./frontend
     restart: unless-stopped
     ports:
-      - "3000:80"
+      - "3001:80"
     environment:
       VITE_API_URL: ${VITE_API_URL:-http://10.1.0.2:8000}
     networks:

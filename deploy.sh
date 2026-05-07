@@ -88,7 +88,7 @@ fi
 echo ""
 echo "[deploy] Done."
 echo "  Backend:  http://10.1.0.2:8000/health"
-echo "  Frontend: http://10.1.0.2:3000"
+echo "  Frontend: http://10.1.0.2:3001"
 echo ""
 echo "  First-time? Create an API key:"
 echo "    docker compose -f $DEPLOY_DIR/docker-compose.yml exec backend \\"
