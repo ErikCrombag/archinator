@@ -141,28 +141,31 @@ RELATIONSHIP_RULES: dict[str, dict] = {
         "allowed_pairs": [
             ("ActiveStructure", "Behavior"),
             ("ActiveStructure", "ActiveStructure"),  # role → actor
+            ("ActiveStructure", "PassiveStructure"),  # deployment: Node→Artifact, Equipment/Facility→Material
         ],
         "same_layer_preferred": True,
         "cross_layer": False,
-        "notes": "Active Structure assigned to Behavior or another Active Structure element.",
+        "notes": "Active Structure assigned to Behavior, another Active Structure, or Passive Structure (deployment).",
     },
     "Realization": {
         "allowed_pairs": [
             ("Behavior", "Behavior"),
             ("PassiveStructure", "PassiveStructure"),
+            ("PassiveStructure", "ActiveStructure"),  # Artifact → ApplicationComponent/SystemSoftware
             ("Behavior", "Motivation"),       # WorkPackage → Goal/Requirement
             ("PassiveStructure", "Motivation"),
             ("Composite", "Composite"),        # Plateau → Plateau
         ],
         "same_layer_preferred": False,
         "cross_layer": True,
-        "notes": "Lower-layer element realizes higher-layer counterpart.",
+        "notes": "Lower-layer element realizes higher-layer counterpart. Includes Artifact realizing ApplicationComponent.",
     },
     "Serving": {
         "allowed_pairs": [
             ("Behavior", "Behavior"),
             ("Behavior", "ActiveStructure"),
             ("ActiveStructure", "ActiveStructure"),
+            ("ActiveStructure", "Behavior"),  # spec B.5: interface/actor serving a process (derived but allowed)
         ],
         "same_layer_preferred": False,
         "cross_layer": True,
@@ -171,10 +174,11 @@ RELATIONSHIP_RULES: dict[str, dict] = {
     "Access": {
         "allowed_pairs": [
             ("Behavior", "PassiveStructure"),
+            ("ActiveStructure", "PassiveStructure"),  # spec §5.2.2: "active structure element or a behavior element"
         ],
         "same_layer_preferred": False,
         "cross_layer": True,
-        "notes": "Behavior element accesses a Passive Structure element.",
+        "notes": "Behavior or Active Structure element observes or acts upon a Passive Structure element.",
     },
     "Influence": {
         "allowed_pairs": [
@@ -182,13 +186,12 @@ RELATIONSHIP_RULES: dict[str, dict] = {
             ("ActiveStructure", "Motivation"),
             ("Behavior", "Motivation"),
             ("PassiveStructure", "Motivation"),
-            ("Motivation", "ActiveStructure"),
-            ("Motivation", "Behavior"),
-            ("Motivation", "PassiveStructure"),
+            # NOTE: Motivation→Core Influence is NOT allowed per spec B.4 restriction (line 245)
+            # and confirmed by B.5 tables (image 377): Motivation source → Core/Strategy rows show ONLY 'O' (Association).
         ],
         "same_layer_preferred": False,
         "cross_layer": True,
-        "notes": "Used primarily within Motivation layer and between Motivation and core layers.",
+        "notes": "Core/Strategy elements influence Motivation targets, or Motivation→Motivation. Motivation cannot influence Core elements.",
     },
     "Association": {
         "allowed_pairs": [(ANY, ANY)],

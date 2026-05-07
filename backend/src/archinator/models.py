@@ -97,3 +97,7 @@ class GenerationResult:
     compaction_mode: CompactionMode = CompactionMode.FULL
     compact_validation: ValidationResult | None = None
     rag_chunks_used: list[str] = field(default_factory=list)
+    # True when all retries were exhausted and the model is still invalid.
+    # Callers MUST surface this to the user — the output is not valid ArchiMate 3.2.
+    best_effort: bool = False
+    attempts: int = 1

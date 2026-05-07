@@ -9,10 +9,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 python -m pytest tests/ -v
 python -m pytest tests/test_validation.py::test_access_behavior_to_passive_passes  # single test
 
+# Render rules_core.md from rules.py (also runs at Docker build time)
+python scripts/render_rules_md.py
+
 # Bootstrap (one-time setup — requires PDF and Ollama running)
-python scripts/bootstrap.py --pdf data/archimate_spec.pdf --ollama-url http://<AI_SERVER>:11434
-python scripts/bootstrap.py --pdf data/archimate_spec.pdf --index-only   # rebuild ChromaDB only
-python scripts/bootstrap.py --pdf data/archimate_spec.pdf --skip-review  # non-interactive
+# Builds ChromaDB RAG index (examples, patterns, guidance) + semantic_core.md
+python scripts/bootstrap.py --pdf data/archimate_book.pdf --ollama-url http://<AI_SERVER>:11434
+python scripts/bootstrap.py --pdf data/archimate_book.pdf --index-only     # RAG index only, skip guidance extraction
+python scripts/bootstrap.py --pdf data/archimate_book.pdf --guidance-only  # guidance only, skip RAG rebuild
+python scripts/bootstrap.py --pdf data/archimate_book.pdf --skip-review    # non-interactive
+python scripts/bootstrap.py --pdf data/archimate_book.pdf --extra-url https://example.com/archimate-patterns
 
 # Run backend locally (install deps first)
 cd backend && pip install -e .
@@ -94,7 +100,7 @@ API keys stored in SQLite (`data/archinator.db`). Keys are SHA-256 hashed; only 
 
 **Needs user input before proceeding:**
 - Ollama hostname/port on the AI server (update `.env` / `docker-compose.yml`)
-- SSH credentials for deployment to AI server
+- Set up CICD pipeline (+SSH credentials for deployment to AI server)
 - How to get `archimate_spec.pdf` onto the server (`data/` volume mount path)
 - OpenGroup website URL(s) to use in `scripts/bootstrap.py` (default list in script may need adjustment)
 

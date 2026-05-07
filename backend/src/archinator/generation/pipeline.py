@@ -49,11 +49,19 @@ async def generate(
         refinement_query=refinement_query,
     )
 
-    model = await _generate_with_retries(
+    model, attempts = await _generate_with_retries(
         system_prompt, user_prompt, ollama_base_url, ollama_model, viewpoint
     )
 
     full_validation = validator.validate(model, viewpoint=viewpoint)
+    best_effort = not full_validation.valid
+    if best_effort:
+        log.error(
+            "All %d attempt(s) exhausted — returning best-effort INVALID model (%d errors).",
+            attempts, len(full_validation.errors()),
+        )
+    else:
+        log.info("Valid model generated in %d attempt(s).", attempts)
 
     if compaction != CompactionMode.FULL:
         compact = compact_model(model, compaction, viewpoint)
@@ -81,6 +89,8 @@ async def generate(
         compaction_mode=compaction,
         compact_validation=compact_validation,
         rag_chunks_used=rag_chunks,
+        best_effort=best_effort,
+        attempts=attempts,
     )
 
 
@@ -90,47 +100,116 @@ async def _generate_with_retries(
     base_url: str,
     model_name: str,
     viewpoint: str | None,
-) -> ArchiMateModel:
-    last_error: Exception | None = None
-    for attempt in range(MAX_RETRIES):
-        try:
-            raw = await _call_ollama(system_prompt, user_prompt, base_url, model_name)
-            model = _parse_model_json(raw)
-            result = validator.validate(model, viewpoint=viewpoint)
-            if result.valid:
-                return model
-            # Feed violations back for self-correction
-            violation_text = "\n".join(
-                f"- [{v.rule}] {v.message}" for v in result.errors()
-            )
-            log.warning("Attempt %d: %d violations, retrying with feedback", attempt + 1, len(result.errors()))
-            user_prompt = (
-                f"{user_prompt}\n\n"
-                f"## Previous attempt had validation errors — fix ALL of them:\n{violation_text}"
-            )
-        except Exception as exc:
-            last_error = exc
-            log.warning("Attempt %d failed: %s", attempt + 1, exc)
+) -> tuple[ArchiMateModel, int]:
+    """
+    Self-correcting generation loop using multi-turn conversation.
 
-    # Return the last model even if invalid (caller inspects validation result)
-    if last_error:
-        raise last_error
-    raw = await _call_ollama(system_prompt, user_prompt, base_url, model_name)
-    return _parse_model_json(raw)
+    On each failure the LLM's previous response is added as an 'assistant'
+    message and the validation errors are added as a 'user' message, giving
+    the model full context to fix exactly what it produced.
+
+    Returns (best_model, attempts_used).  If all retries fail the last
+    successfully-parsed model (even if invalid) is returned; if parsing
+    never succeeded a final unconstrained call is made.
+    """
+    messages: list[dict[str, str]] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user",   "content": user_prompt},
+    ]
+
+    best_model: ArchiMateModel | None = None
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        raw = await _call_ollama(messages, base_url, model_name)
+
+        # ── Parse ─────────────────────────────────────────────────────────────
+        try:
+            model = _parse_model_json(raw)
+        except Exception as exc:
+            log.warning("Attempt %d/%d: JSON parse error: %s", attempt, MAX_RETRIES, exc)
+            if attempt < MAX_RETRIES:
+                messages.append({"role": "assistant", "content": raw})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "Your response was not valid JSON.\n"
+                        f"Parse error: {exc}\n\n"
+                        "Return ONLY a valid JSON object matching the schema. "
+                        "No markdown fences, no prose."
+                    ),
+                })
+            continue
+
+        best_model = model
+
+        # ── Validate ──────────────────────────────────────────────────────────
+        result = validator.validate(model, viewpoint=viewpoint)
+        if result.valid:
+            log.info("Attempt %d/%d: valid model generated.", attempt, MAX_RETRIES)
+            return model, attempt
+
+        errors = result.errors()
+        log.warning(
+            "Attempt %d/%d: %d validation error(s) — feeding back to LLM",
+            attempt, MAX_RETRIES, len(errors),
+        )
+
+        if attempt < MAX_RETRIES:
+            messages.append({"role": "assistant", "content": raw})
+            messages.append({
+                "role": "user",
+                "content": _correction_prompt(errors),
+            })
+
+    # ── All retries exhausted ─────────────────────────────────────────────────
+    if best_model is not None:
+        log.warning("All %d retries exhausted; returning best (invalid) model.", MAX_RETRIES)
+        return best_model, MAX_RETRIES
+
+    # Parsing never succeeded — one final attempt with the accumulated context
+    log.warning("Parsing never succeeded; making final unconstrained attempt.")
+    raw = await _call_ollama(messages, base_url, model_name)
+    return _parse_model_json(raw), MAX_RETRIES + 1
+
+
+def _correction_prompt(errors: list) -> str:
+    """
+    Format validation errors into a clear, actionable correction request.
+    Groups by rule type so the LLM sees a structured fix list.
+    """
+    by_rule: dict[str, list[str]] = {}
+    for v in errors:
+        by_rule.setdefault(v.rule, []).append(v.message)
+
+    lines = [
+        "Your previous model has validation errors. Fix ALL of them and return "
+        "the complete corrected JSON (not just the changed parts).\n",
+        "## Validation errors",
+    ]
+    for rule, messages in by_rule.items():
+        lines.append(f"\n### {rule}")
+        for msg in messages:
+            lines.append(f"- {msg}")
+
+    lines.append(
+        "\n## Instructions\n"
+        "- Return ONLY the corrected JSON object.\n"
+        "- Keep all elements and relationships that are already valid.\n"
+        "- Fix only the elements/relationships listed above.\n"
+        "- Do not add or remove elements unless required to fix an error."
+    )
+    return "\n".join(lines)
 
 
 async def _call_ollama(
-    system_prompt: str,
-    user_prompt: str,
+    messages: list[dict[str, str]],
     base_url: str,
     model_name: str,
 ) -> str:
+    """Call Ollama /api/chat with a full message history."""
     payload: dict[str, Any] = {
         "model": model_name,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
+        "messages": messages,
         "stream": False,
         "format": "json",
         "options": {

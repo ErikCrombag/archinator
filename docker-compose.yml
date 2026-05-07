@@ -1,11 +1,19 @@
 services:
   backend:
-    build: ./backend
+    image: ghcr.io/${GHCR_OWNER}/archinator-backend:${IMAGE_TAG:-latest}
+    build:
+      context: .           # repo root — gives Dockerfile access to scripts/
+      dockerfile: backend/Dockerfile
     restart: unless-stopped
     ports:
       - "8000:8000"
     volumes:
-      - ./data:/app/data
+      # rules_core.md is baked into the image at build time — not mounted.
+      # chroma/ and archinator.db persist across restarts via bind mounts.
+      # semantic_core.md is optional (written by bootstrap); pre-created by deploy.sh.
+      - ./data/chroma:/app/data/chroma
+      - ./data/archinator.db:/app/data/archinator.db
+      - ./data/semantic_core.md:/app/data/semantic_core.md
     environment:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.3}
@@ -20,11 +28,12 @@ services:
       retries: 3
 
   frontend:
+    image: ghcr.io/${GHCR_OWNER}/archinator-frontend:${IMAGE_TAG:-latest}
     build: ./frontend
     restart: unless-stopped
     ports:
       - "3000:80"
     environment:
-      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+      VITE_API_URL: ${VITE_API_URL:-http://10.1.0.2:8000}
     depends_on:
       - backend

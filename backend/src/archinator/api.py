@@ -106,6 +106,8 @@ async def generate_diagram(
     response: dict = {
         "model_name": result.model.name,
         "valid": result.validation.valid,
+        "best_effort": result.best_effort,
+        "attempts": result.attempts,
         "violations": [
             {"rule": v.rule, "message": v.message, "severity": v.severity}
             for v in result.validation.violations
@@ -113,6 +115,13 @@ async def generate_diagram(
         "compaction": result.compaction_mode.value,
         "outputs": result.outputs,
     }
+    if result.best_effort:
+        error_count = len(result.validation.errors())
+        response["warning"] = (
+            f"All {result.attempts} generation attempt(s) exhausted without producing valid "
+            f"ArchiMate 3.2. This output is BEST-EFFORT ONLY and contains {error_count} "
+            f"validation error(s). Do not use in production diagrams without manual review."
+        )
     if result.compact_validation:
         response["compact_valid"] = result.compact_validation.valid
         response["compact_violations"] = [
