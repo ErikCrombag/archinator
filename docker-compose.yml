@@ -1,0 +1,30 @@
+services:
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.3}
+      DB_PATH: /app/data/archinator.db
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+    depends_on:
+      - backend

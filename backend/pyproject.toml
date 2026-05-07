@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "archinator"
+version = "0.1.0"
+description = "MCP server for generating valid ArchiMate 3.2 diagrams"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.0.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "httpx>=0.28.0",
+    "ollama>=0.4.0",
+    "chromadb>=0.6.0",
+    "sentence-transformers>=3.3.0",
+    "pymupdf>=1.25.0",
+    "sqlalchemy>=2.0.0",
+    "aiosqlite>=0.20.0",
+    "bcrypt>=4.2.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+    "python-dotenv>=1.0.0",
+    "rich>=13.9.0",
+    "click>=8.1.0",
+    "lxml>=5.3.0",
+]
+
+[project.scripts]
+archinator-server = "archinator.server:main"
+archinator-api = "archinator.api:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/archinator"]
+
+[tool.hatch.envs.default]
+dependencies = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.28.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["../../tests"]
