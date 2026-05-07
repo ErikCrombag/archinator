@@ -97,6 +97,11 @@ WEB_SOURCES: list[dict] = [
         "label": "ArchiMate 3.2 Example Viewpoints",
         "kind": "examples",
     },
+    {
+        "url": "https://www.hosiaisluoma.fi/blog/useful-archimate-diagram-types/",
+        "label": "Useful ArchiMate Diagram Types (Hosiaisluoma)",
+        "kind": "examples",
+    },
 ]
 
 
