@@ -15,12 +15,13 @@ services:
       - ./data/archinator.db:/app/data/archinator.db
       - ./data/semantic_core.md:/app/data/semantic_core.md
     environment:
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.3}
       DB_PATH: /app/data/archinator.db
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    networks:
+      - internal
+      - ai-net
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"]
       interval: 30s
@@ -35,5 +36,13 @@ services:
       - "3000:80"
     environment:
       VITE_API_URL: ${VITE_API_URL:-http://10.1.0.2:8000}
+    networks:
+      - internal
     depends_on:
       - backend
+
+networks:
+  internal:
+    driver: bridge
+  ai-net:
+    external: true   # created once: docker network create ai-net
