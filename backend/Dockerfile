@@ -8,9 +8,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/pyproject.toml .
-RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir .
-
 COPY backend/src/ src/
+RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir .
 
 # Pre-download embedding model so container starts fast
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
