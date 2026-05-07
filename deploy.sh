@@ -11,10 +11,9 @@
 #   ./deploy.sh --down     # stop and remove containers (data preserved)
 #
 # First-time server setup:
-#   1. Log in to ghcr.io once:
-#        echo YOUR_GITHUB_PAT | docker login ghcr.io -u YOUR_GITHUB_USER --password-stdin
-#   2. Copy this repo (or just docker-compose.yml + deploy.sh + .env.example) to the server.
-#   3. Run ./deploy.sh
+#   1. curl -fsSL https://raw.githubusercontent.com/ErikCrombag/archinator/master/bootstrap-server.sh | bash
+#   2. cd ~/docker/archinator && cp .env.example .env && nano .env
+#   3. ./deploy.sh
 set -euo pipefail
 
 DEPLOY_DIR="$(cd "$(dirname "$0")" && pwd)"
