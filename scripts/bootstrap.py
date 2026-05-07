@@ -32,7 +32,9 @@ Usage:
     python scripts/bootstrap.py --pdf data/archimate_book.pdf --guidance-only
     python scripts/bootstrap.py --pdf data/archimate_book.pdf --skip-review
     python scripts/bootstrap.py --pdf data/archimate_book.pdf \\
-        --ollama-url http://ai-server:11434 --ollama-model llama3.3
+        --ollama-url http://ollama:11434 --ollama-model llama4:16x17b
+    python scripts/bootstrap.py --pdf data/archimate_book.pdf \\
+        --sources data/sources.txt   # default, explicit override possible
 """
 from __future__ import annotations
 
@@ -58,51 +60,41 @@ DRAFT_PATH = DATA_DIR / "semantic_core_draft.md"
 FINAL_PATH = DATA_DIR / "semantic_core.md"
 CHROMA_DIR = DATA_DIR / "chroma"
 
-# Web sources for supplementary content.
-# Focus on usage examples, patterns, and community guidance — not the normative spec
-# (the spec's formal rules are already in rules_core.md via rules.py).
-WEB_SOURCES: list[dict] = [
-    {
-        "url": "https://pubs.opengroup.org/architecture/archimate32-doc/chap08.html",
-        "label": "ArchiMate 3.2 Business Layer",
-        "kind": "spec",
-    },
-    {
-        "url": "https://pubs.opengroup.org/architecture/archimate32-doc/chap09.html",
-        "label": "ArchiMate 3.2 Application Layer",
-        "kind": "spec",
-    },
-    {
-        "url": "https://pubs.opengroup.org/architecture/archimate32-doc/chap10.html",
-        "label": "ArchiMate 3.2 Technology Layer",
-        "kind": "spec",
-    },
-    {
-        "url": "https://pubs.opengroup.org/architecture/archimate32-doc/chap11.html",
-        "label": "ArchiMate 3.2 Physical Layer",
-        "kind": "spec",
-    },
-    {
-        "url": "https://pubs.opengroup.org/architecture/archimate32-doc/chap06.html",
-        "label": "ArchiMate 3.2 Motivation",
-        "kind": "spec",
-    },
-    {
-        "url": "https://pubs.opengroup.org/architecture/archimate32-doc/chap07.html",
-        "label": "ArchiMate 3.2 Strategy",
-        "kind": "spec",
-    },
-    {
-        "url": "https://pubs.opengroup.org/architecture/archimate32-doc/apdxc.html",
-        "label": "ArchiMate 3.2 Example Viewpoints",
-        "kind": "examples",
-    },
-    {
-        "url": "https://www.hosiaisluoma.fi/blog/useful-archimate-diagram-types/",
-        "label": "Useful ArchiMate Diagram Types (Hosiaisluoma)",
-        "kind": "examples",
-    },
-]
+DEFAULT_SOURCES_FILE = Path(__file__).parent.parent / "data" / "sources.txt"
+
+
+def parse_sources(sources_file: Path) -> tuple[list[Path], list[str]]:
+    """Parse sources.txt → (pdf_paths, urls).
+
+    Handles:
+      - Local *.pdf files
+      - Local directories (globs all *.pdf inside)
+      - https:// URLs ending in .pdf  → remote PDF
+      - https:// URLs (other)         → web page
+    """
+    pdf_paths: list[Path] = []
+    urls: list[str] = []
+
+    if not sources_file.exists():
+        return pdf_paths, urls
+
+    for raw_line in sources_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        if line.startswith("http://") or line.startswith("https://"):
+            urls.append(line)
+        else:
+            p = Path(line)
+            if p.is_dir():
+                pdf_paths.extend(sorted(p.glob("*.pdf")))
+            elif p.suffix.lower() == ".pdf":
+                pdf_paths.append(p)
+            else:
+                console.print(f"[yellow]  sources.txt: skipping unknown entry: {line}[/yellow]")
+
+    return pdf_paths, urls
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -123,13 +115,13 @@ def _detect_view_ref(text: str) -> str | None:
 
 def build_rag_index(
     pdf_path: Path,
-    extra_urls: list[str] | None = None,
-    extra_pdfs: list[str] | None = None,
+    ollama_url: str,
+    sources_file: Path | None = None,
 ) -> None:
     """
     Chunk and embed:
-      - All pages of the PDF (not keyword-filtered — LLM query handles relevance)
-      - Web sources from WEB_SOURCES + any extra_urls passed in
+      - Main PDF (--pdf, always indexed)
+      - Additional sources from sources_file (PDFs, dirs, URLs)
 
     Metadata stored per chunk: source, page (PDF) or url (web), kind, view_ref.
     """
@@ -226,26 +218,17 @@ def build_rag_index(
 
     doc.close()
 
-    # ── Extra PDFs (local paths or URLs) ─────────────────────────────────────
+    # ── Additional sources from sources.txt ───────────────────────────────────
     import tempfile
-    for pdf_src in (extra_pdfs or []):
-        if pdf_src.startswith("http://") or pdf_src.startswith("https://"):
-            console.print(f"[cyan]Downloading extra PDF:[/cyan] {pdf_src}")
-            with httpx.Client(timeout=120, follow_redirects=True) as dl:
-                r = dl.get(pdf_src)
-                r.raise_for_status()
-            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-                tmp.write(r.content)
-                extra_pdf_path = Path(tmp.name)
-            label = pdf_src.split("/")[-1]
-        else:
-            extra_pdf_path = Path(pdf_src)
-            label = extra_pdf_path.name
+    sf = sources_file or DEFAULT_SOURCES_FILE
+    extra_pdf_paths, urls = parse_sources(sf)
+    console.print(f"[cyan]Sources file:[/cyan] {sf} — {len(extra_pdf_paths)} PDFs, {len(urls)} URLs")
 
-        console.print(f"[cyan]Indexing extra PDF:[/cyan] {label}")
-        extra_doc = fitz.open(str(extra_pdf_path))
-        for page_num in range(len(extra_doc)):
-            text = extra_doc[page_num].get_text().strip()
+    def _index_pdf_file(pdf_file: Path, label: str, key_prefix: str) -> None:
+        console.print(f"[cyan]Indexing PDF:[/cyan] {label}")
+        d = fitz.open(str(pdf_file))
+        for page_num in range(len(d)):
+            text = d[page_num].get_text().strip()
             if not text:
                 continue
             view_ref = _detect_view_ref(text)
@@ -255,19 +238,36 @@ def build_rag_index(
                 meta: dict = {"source": label, "page": page_num + 1, "kind": "book"}
                 if view_ref:
                     meta["view_ref"] = view_ref
-                add_chunk(chunk, meta, f"extpdf:{label}:p{page_num}:w{i}")
-        extra_doc.close()
+                add_chunk(chunk, meta, f"{key_prefix}:p{page_num}:w{i}")
+        d.close()
+
+    for extra_pdf in extra_pdf_paths:
+        _index_pdf_file(extra_pdf, extra_pdf.name, f"pdf:{extra_pdf.name}")
+
+    # Remote PDF URLs (ends with .pdf) — download then index
+    web_urls: list[str] = []
+    with httpx.Client(timeout=120, follow_redirects=True) as dl_client:
+        for url in urls:
+            if url.lower().split("?")[0].endswith(".pdf"):
+                console.print(f"[cyan]Downloading remote PDF:[/cyan] {url}")
+                try:
+                    r = dl_client.get(url)
+                    r.raise_for_status()
+                    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                        tmp.write(r.content)
+                        tmp_path = Path(tmp.name)
+                    label = url.split("/")[-1].split("?")[0]
+                    _index_pdf_file(tmp_path, label, f"pdf:{label}")
+                except Exception as exc:
+                    console.print(f"[yellow]  warning: could not download {url}: {exc}[/yellow]")
+            else:
+                web_urls.append(url)
 
     flush()
 
-    # ── Web sources ───────────────────────────────────────────────────────────
-    all_web = list(WEB_SOURCES)
-    for url in (extra_urls or []):
-        all_web.append({"url": url, "label": url, "kind": "web"})
-
+    # ── Web pages ─────────────────────────────────────────────────────────────
     with httpx.Client(timeout=30, follow_redirects=True) as client:
-        for src in all_web:
-            url = src["url"]
+        for url in web_urls:
             try:
                 r = client.get(url)
                 r.raise_for_status()
@@ -275,7 +275,7 @@ def build_rag_index(
                 words = text.split()
                 for i in range(0, max(1, len(words) - OVERLAP_WORDS), CHUNK_WORDS - OVERLAP_WORDS):
                     chunk = " ".join(words[i : i + CHUNK_WORDS])
-                    meta = {"source": url, "label": src.get("label", url), "kind": src.get("kind", "web")}
+                    meta = {"source": url, "kind": "web"}
                     add_chunk(chunk, meta, f"web:{url}:w{i}")
                 console.print(f"[green]  indexed {url} ({len(words):,} words)[/green]")
             except Exception as exc:
@@ -355,19 +355,20 @@ def _extract_pdf_for_guidance(pdf_path: Path) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def _fetch_web_for_guidance() -> str:
+def _fetch_web_for_guidance(sources_file: Path | None = None) -> str:
+    """Fetch non-PDF URLs from sources.txt for use in guidance extraction."""
+    _, urls = parse_sources(sources_file or DEFAULT_SOURCES_FILE)
+    web_urls = [u for u in urls if not u.lower().split("?")[0].endswith(".pdf")]
     parts: list[str] = []
     with httpx.Client(timeout=30, follow_redirects=True) as client:
-        for src in WEB_SOURCES:
-            if src.get("kind") not in ("examples", "spec"):
-                continue
+        for url in web_urls:
             try:
-                r = client.get(src["url"])
+                r = client.get(url)
                 r.raise_for_status()
                 text = _strip_html(r.text)
-                parts.append(f"## {src['label']}\n\n{text[:6000]}")
+                parts.append(f"## {url}\n\n{text[:6000]}")
             except Exception as exc:
-                console.print(f"[yellow]  warning: {src['url']}: {exc}[/yellow]")
+                console.print(f"[yellow]  warning: {url}: {exc}[/yellow]")
     return "\n\n---\n\n".join(parts)
 
 
@@ -413,13 +414,12 @@ def review_draft() -> bool:
 
 @click.command()
 @click.option("--pdf", "pdf_path", type=click.Path(exists=True), required=True,
-              help="Path to ArchiMate book / spec PDF")
+              help="Path to main ArchiMate book / spec PDF (also used for guidance extraction)")
+@click.option("--sources", "sources_path",
+              type=click.Path(), default=None,
+              help=f"Sources manifest file (default: data/sources.txt)")
 @click.option("--ollama-url", default="http://localhost:11434", show_default=True)
 @click.option("--ollama-model", default="llama3.3", show_default=True)
-@click.option("--extra-url", "extra_urls", multiple=True,
-              help="Additional URLs to crawl and index (repeatable)")
-@click.option("--extra-pdf", "extra_pdfs", multiple=True,
-              help="Additional PDFs to index — local path or URL (repeatable)")
 @click.option("--index-only", is_flag=True, default=False,
               help="Only build RAG index; skip guidance extraction")
 @click.option("--guidance-only", is_flag=True, default=False,
@@ -428,10 +428,9 @@ def review_draft() -> bool:
               help="Auto-accept guidance draft without interactive review")
 def main(
     pdf_path: str,
+    sources_path: str | None,
     ollama_url: str,
     ollama_model: str,
-    extra_urls: tuple[str, ...],
-    extra_pdfs: tuple[str, ...],
     index_only: bool,
     guidance_only: bool,
     skip_review: bool,
@@ -443,9 +442,11 @@ def main(
         console.print("[red]--index-only and --guidance-only are mutually exclusive.[/red]")
         sys.exit(1)
 
+    sources = Path(sources_path) if sources_path else DEFAULT_SOURCES_FILE
+
     # ── Phase 1: RAG index ────────────────────────────────────────────────────
     if not guidance_only:
-        build_rag_index(pdf, list(extra_urls), list(extra_pdfs))
+        build_rag_index(pdf, ollama_url, sources)
 
     # ── Phase 2: Guidance extraction ──────────────────────────────────────────
     if not index_only:
@@ -455,7 +456,7 @@ def main(
             t = p.add_task("Scanning PDF for guidance content...", total=None)
             pdf_text = _extract_pdf_for_guidance(pdf)
             p.update(t, description="Fetching web sources...")
-            web_text = _fetch_web_for_guidance()
+            web_text = _fetch_web_for_guidance(sources)
 
         console.print(
             f"[green]PDF guidance excerpts: {len(pdf_text):,} chars | "

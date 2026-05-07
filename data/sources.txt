@@ -1,0 +1,24 @@
+# Archinator RAG sources
+# One entry per line. Blank lines and lines starting with # are ignored.
+#
+# Supported entry types:
+#   /local/path/file.pdf          — single PDF
+#   /local/path/books/            — directory: indexes all *.pdf files inside
+#   https://example.com/doc.pdf   — remote PDF (downloaded automatically)
+#   https://example.com/page      — web page (HTML stripped and chunked)
+
+# ── ArchiMate 3.2 spec chapters (opengroup.org) ───────────────────────────────
+https://pubs.opengroup.org/architecture/archimate32-doc/chap06.html
+https://pubs.opengroup.org/architecture/archimate32-doc/chap07.html
+https://pubs.opengroup.org/architecture/archimate32-doc/chap08.html
+https://pubs.opengroup.org/architecture/archimate32-doc/chap09.html
+https://pubs.opengroup.org/architecture/archimate32-doc/chap10.html
+https://pubs.opengroup.org/architecture/archimate32-doc/chap11.html
+https://pubs.opengroup.org/architecture/archimate32-doc/apdxc.html
+
+# ── Practical guides and examples ─────────────────────────────────────────────
+https://www.hosiaisluoma.fi/ArchiMate-Cookbook.pdf
+https://www.hosiaisluoma.fi/blog/useful-archimate-diagram-types/
+
+# ── Local books (place PDFs in data/books/) ───────────────────────────────────
+# /app/data/books/
