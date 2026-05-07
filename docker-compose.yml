@@ -16,7 +16,8 @@ services:
       - ./data/semantic_core.md:/app/data/semantic_core.md
     environment:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.3}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama4:16x17b}
+      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
       DB_PATH: /app/data/archinator.db
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     networks:

@@ -11,9 +11,6 @@ COPY backend/pyproject.toml .
 COPY backend/src/ src/
 RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir .
 
-# Pre-download embedding model so container starts fast
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
-
 # Generate rules_core.md from rules.py at build time so it is always in sync
 # with the validator.  Baked into the image layer — docker-compose volume
 # mounts only cover chroma/, archinator.db, and semantic_core.md (bootstrap

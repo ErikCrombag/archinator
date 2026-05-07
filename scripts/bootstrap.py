@@ -126,7 +126,6 @@ def build_rag_index(pdf_path: Path, extra_urls: list[str] | None = None) -> None
     """
     import fitz  # type: ignore
     import chromadb  # type: ignore
-    from sentence_transformers import SentenceTransformer  # type: ignore
 
     console.print(Panel("[bold]Phase 1: Building RAG index[/bold]", style="cyan"))
 
@@ -134,7 +133,18 @@ def build_rag_index(pdf_path: Path, extra_urls: list[str] | None = None) -> None
         console.print(f"[yellow]Removing existing ChromaDB at {CHROMA_DIR}[/yellow]")
         shutil.rmtree(CHROMA_DIR)
 
-    embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+    embed_base_url = ollama_url
+    embed_model_name = os.environ.get("EMBED_MODEL", "nomic-embed-text")
+
+    def _embed(texts: list[str]) -> list[list[float]]:
+        resp = httpx.post(
+            f"{embed_base_url}/api/embed",
+            json={"model": embed_model_name, "input": texts},
+            timeout=120.0,
+        )
+        resp.raise_for_status()
+        return resp.json()["embeddings"]
+
     client = chromadb.PersistentClient(path=str(CHROMA_DIR))
     collection = client.get_or_create_collection(
         name="archimate_spec",
@@ -148,7 +158,7 @@ def build_rag_index(pdf_path: Path, extra_urls: list[str] | None = None) -> None
     def flush() -> None:
         if not pending_chunks:
             return
-        embeddings = embed_model.encode(pending_chunks, show_progress_bar=False).tolist()
+        embeddings = _embed(pending_chunks)
         collection.upsert(
             ids=pending_ids,
             documents=pending_chunks,
