@@ -65,6 +65,9 @@ if [[ ! -f "$DATA_DIR/semantic_core.md" ]]; then
   echo "[deploy]   created data/semantic_core.md (empty — run bootstrap to populate)"
 fi
 
+# books/ — directory for local PDFs
+mkdir -p "$DATA_DIR/books"
+
 # ── .env ─────────────────────────────────────────────────────────────────────
 if [[ ! -f "$DEPLOY_DIR/.env" ]]; then
   echo "[deploy] No .env found — copying from .env.example"

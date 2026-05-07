@@ -14,6 +14,8 @@ services:
       - ./data/chroma:/app/data/chroma
       - ./data/archinator.db:/app/data/archinator.db
       - ./data/semantic_core.md:/app/data/semantic_core.md
+      - ./data/sources.txt:/app/data/sources.txt
+      - ./data/books:/app/data/books
     environment:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama4:16x17b}
