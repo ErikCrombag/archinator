@@ -234,16 +234,12 @@ def _index_pdf_images(
 
 
 def build_rag_index(
-    pdf_path: Path,
     ollama_url: str,
     sources_file: Path | None = None,
     vision_model: str | None = None,
 ) -> None:
     """
-    Chunk and embed:
-      - Main PDF (--pdf, always indexed)
-      - Additional sources from sources_file (PDFs, dirs, URLs)
-
+    Chunk and embed all sources from sources_file (PDFs, dirs, URLs).
     Metadata stored per chunk: source, page (PDF) or url (web), kind, view_ref.
     """
     import fitz  # type: ignore
@@ -310,49 +306,8 @@ def build_rag_index(
         if len(pending_chunks) >= 64:
             flush()
 
-    # ── PDF ──────────────────────────────────────────────────────────────────
     CHUNK_WORDS = 500
     OVERLAP_WORDS = 80
-
-    doc = fitz.open(str(pdf_path))
-    total_pages = len(doc)
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        console=console,
-    ) as progress:
-        task = progress.add_task("Indexing PDF pages...", total=total_pages)
-
-        for page_num in range(total_pages):
-            text = doc[page_num].get_text().strip()
-            if not text:
-                progress.advance(task)
-                continue
-
-            view_ref = _detect_view_ref(text)
-            words = text.split()
-
-            for i in range(0, max(1, len(words) - OVERLAP_WORDS), CHUNK_WORDS - OVERLAP_WORDS):
-                chunk = " ".join(words[i : i + CHUNK_WORDS])
-                meta: dict = {
-                    "source": pdf_path.name,
-                    "page": page_num + 1,
-                    "kind": "book",
-                }
-                if view_ref:
-                    meta["view_ref"] = view_ref
-                add_chunk(chunk, meta, f"pdf:p{page_num}:w{i}")
-
-            progress.advance(task)
-
-    doc.close()
-
-    # ── Vision pass: main PDF ─────────────────────────────────────────────────
-    if vision_model:
-        _index_pdf_images(pdf_path, pdf_path.name, "pdf", ollama_url, vision_model, add_chunk)
 
     # ── Additional sources from sources.txt ───────────────────────────────────
     import tempfile
@@ -592,8 +547,8 @@ def review_draft() -> bool:
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 @click.command()
-@click.option("--pdf", "pdf_path", type=click.Path(exists=True), required=True,
-              help="Path to main ArchiMate book / spec PDF (also used for guidance extraction)")
+@click.option("--pdf", "pdf_path", type=click.Path(exists=True), default=None,
+              help="Primary PDF for guidance extraction. If omitted, uses first PDF from sources.txt.")
 @click.option("--sources", "sources_path",
               type=click.Path(), default=None,
               help=f"Sources manifest file (default: data/sources.txt)")
@@ -611,7 +566,7 @@ def review_draft() -> bool:
 @click.option("--skip-review", is_flag=True, default=False,
               help="Auto-accept guidance draft without interactive review")
 def main(
-    pdf_path: str,
+    pdf_path: str | None,
     sources_path: str | None,
     ollama_url: str,
     ollama_model: str,
@@ -622,13 +577,22 @@ def main(
     skip_review: bool,
 ) -> None:
     DATA_DIR.mkdir(exist_ok=True)
-    pdf = Path(pdf_path)
 
     if index_only and guidance_only:
         console.print("[red]--index-only and --guidance-only are mutually exclusive.[/red]")
         sys.exit(1)
 
     sources = Path(sources_path) if sources_path else DEFAULT_SOURCES_FILE
+
+    # Derive guidance PDF: explicit --pdf, else first PDF from sources.txt
+    guidance_pdf: Path | None = Path(pdf_path) if pdf_path else None
+    if guidance_pdf is None and not index_only:
+        extra_pdfs, _ = parse_sources(sources)
+        if extra_pdfs:
+            guidance_pdf = extra_pdfs[0]
+            console.print(f"[cyan]Guidance PDF:[/cyan] {guidance_pdf} (first PDF from sources.txt)")
+        else:
+            console.print("[yellow]No PDF found — guidance extraction will be skipped.[/yellow]")
 
     # ── Phase 1: RAG index ────────────────────────────────────────────────────
     if not guidance_only:
@@ -637,15 +601,15 @@ def main(
             console.print(f"[cyan]Vision model:[/cyan] {effective_vision}")
         else:
             console.print("[yellow]Vision pass disabled (--skip-vision)[/yellow]")
-        build_rag_index(pdf, ollama_url, sources, effective_vision)
+        build_rag_index(ollama_url, sources, effective_vision)
 
     # ── Phase 2: Guidance extraction ──────────────────────────────────────────
-    if not index_only:
+    if not index_only and guidance_pdf:
         console.print(Panel("[bold]Phase 2: Extracting modeling guidance[/bold]", style="cyan"))
 
         with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as p:
             t = p.add_task("Scanning PDF for guidance content...", total=None)
-            pdf_text = _extract_pdf_for_guidance(pdf)
+            pdf_text = _extract_pdf_for_guidance(guidance_pdf)
             p.update(t, description="Fetching web sources...")
             web_text = _fetch_web_for_guidance(sources)
 
@@ -665,7 +629,7 @@ def main(
             draft = (
                 "# ArchiMate 3.2 Modeling Guidance\n\n"
                 "> AUTO-EXTRACTION FAILED — edit manually.\n\n"
-                f"{pdf_text[:15000]}"
+                + pdf_text[:15000]
             )
 
         DRAFT_PATH.write_text(draft, encoding="utf-8")
