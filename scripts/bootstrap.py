@@ -115,10 +115,129 @@ def _detect_view_ref(text: str) -> str | None:
     return f"View {m.group(1)}" if m else None
 
 
+def _describe_diagram(img_b64: str, page_num: int, view_ref: str | None,
+                      model: str, ollama_url: str) -> str | None:
+    """Send a page image to Ollama vision model and return diagram description."""
+    label = view_ref or f"page {page_num}"
+    prompt = (
+        f"This is page {page_num} of an ArchiMate 3.2 modeling book ({label}).\n"
+        "Describe the diagram(s) on this page in detail:\n"
+        "1. What type of ArchiMate viewpoint or diagram is shown?\n"
+        "2. List all visible elements with their exact ArchiMate type names.\n"
+        "3. List all visible relationships with their types and direction.\n"
+        "4. What does this diagram illustrate or demonstrate?\n"
+        "5. Note any labels, annotations, or callouts visible.\n"
+        "Be precise with ArchiMate terminology. If no diagram is present, say 'No diagram'."
+    )
+    try:
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "images": [img_b64],
+            "stream": False,
+            "options": {"temperature": 0.1, "num_predict": 1024},
+        }
+        with httpx.Client(timeout=120) as client:
+            r = client.post(f"{ollama_url}/api/generate", json=payload)
+            r.raise_for_status()
+            text = r.json().get("response", "").strip()
+        if text.lower().startswith("no diagram"):
+            return None
+        return text
+    except Exception as exc:
+        console.print(f"[yellow]  vision warning page {page_num}: {exc}[/yellow]")
+        return None
+
+
+def _index_pdf_images(
+    pdf_file: Path,
+    label: str,
+    key_prefix: str,
+    ollama_url: str,
+    vision_model: str,
+    add_chunk_fn,
+    min_image_pixels: int = 50_000,
+) -> int:
+    """Render pages with significant images and add vision descriptions as chunks.
+
+    Returns number of diagram chunks added.
+    """
+    import base64
+    import fitz  # type: ignore
+
+    doc = fitz.open(str(pdf_file))
+    pages_with_images = []
+    for page_num in range(len(doc)):
+        page = doc[page_num]
+        images = page.get_images(full=True)
+        # Filter: only pages where at least one image is large enough
+        for img in images:
+            xref = img[0]
+            try:
+                pix = fitz.Pixmap(doc, xref)
+                if pix.width * pix.height >= min_image_pixels:
+                    pages_with_images.append(page_num)
+                    break
+            except Exception:
+                continue
+
+    if not pages_with_images:
+        doc.close()
+        return 0
+
+    console.print(f"[cyan]Vision pass:[/cyan] {label} — {len(pages_with_images)} pages with diagrams")
+    added = 0
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console,
+    ) as prog:
+        task = prog.add_task(
+            f"Describing diagrams in {label}...", total=len(pages_with_images)
+        )
+        for page_num in pages_with_images:
+            page = doc[page_num]
+            text = page.get_text().strip()
+            view_ref = _detect_view_ref(text)
+
+            # Render page at 150 DPI (balance quality vs token cost)
+            mat = fitz.Matrix(150 / 72, 150 / 72)
+            pix = page.get_pixmap(matrix=mat)
+            img_b64 = base64.b64encode(pix.tobytes("png")).decode()
+
+            description = _describe_diagram(img_b64, page_num + 1, view_ref,
+                                            vision_model, ollama_url)
+            if description:
+                chunk_text = (
+                    f"[Diagram — {label} page {page_num + 1}"
+                    + (f" — {view_ref}" if view_ref else "")
+                    + f"]\n\n{description}"
+                )
+                meta: dict = {
+                    "source": label,
+                    "page": page_num + 1,
+                    "kind": "diagram",
+                }
+                if view_ref:
+                    meta["view_ref"] = view_ref
+                add_chunk_fn(chunk_text, meta, f"{key_prefix}:img:p{page_num}")
+                added += 1
+
+            prog.advance(task)
+
+    doc.close()
+    console.print(f"[green]  {added} diagram descriptions indexed from {label}[/green]")
+    return added
+
+
 def build_rag_index(
     pdf_path: Path,
     ollama_url: str,
     sources_file: Path | None = None,
+    vision_model: str | None = None,
 ) -> None:
     """
     Chunk and embed:
@@ -231,6 +350,10 @@ def build_rag_index(
 
     doc.close()
 
+    # ── Vision pass: main PDF ─────────────────────────────────────────────────
+    if vision_model:
+        _index_pdf_images(pdf_path, pdf_path.name, "pdf", ollama_url, vision_model, add_chunk)
+
     # ── Additional sources from sources.txt ───────────────────────────────────
     import tempfile
     sf = sources_file or DEFAULT_SOURCES_FILE
@@ -266,9 +389,13 @@ def build_rag_index(
 
     for extra_pdf in extra_pdf_paths:
         _index_pdf_file(extra_pdf, extra_pdf.name, f"pdf:{extra_pdf.name}")
+        if vision_model:
+            _index_pdf_images(extra_pdf, extra_pdf.name, f"pdf:{extra_pdf.name}",
+                              ollama_url, vision_model, add_chunk)
 
     # Remote PDF URLs (ends with .pdf) — download then index
     web_urls: list[str] = []
+    _downloaded_pdfs: list[tuple[Path, str]] = []  # (tmp_path, label)
     with httpx.Client(timeout=120, follow_redirects=True) as dl_client:
         for url in urls:
             if url.lower().split("?")[0].endswith(".pdf"):
@@ -281,10 +408,17 @@ def build_rag_index(
                         tmp_path = Path(tmp.name)
                     label = url.split("/")[-1].split("?")[0]
                     _index_pdf_file(tmp_path, label, f"pdf:{label}")
+                    _downloaded_pdfs.append((tmp_path, label))
                 except Exception as exc:
                     console.print(f"[yellow]  warning: could not download {url}: {exc}[/yellow]")
             else:
                 web_urls.append(url)
+
+    # Vision pass for downloaded remote PDFs
+    if vision_model:
+        for tmp_path, label in _downloaded_pdfs:
+            _index_pdf_images(tmp_path, label, f"pdf:{label}",
+                              ollama_url, vision_model, add_chunk)
 
     flush()
 
@@ -465,6 +599,11 @@ def review_draft() -> bool:
               help=f"Sources manifest file (default: data/sources.txt)")
 @click.option("--ollama-url", default="http://localhost:11434", show_default=True)
 @click.option("--ollama-model", default="llama3.3", show_default=True)
+@click.option("--vision-model", default=None,
+              help="Ollama model for diagram vision pass (default: same as --ollama-model). "
+                   "Use --skip-vision to disable.")
+@click.option("--skip-vision", is_flag=True, default=False,
+              help="Skip vision pass — do not describe diagrams")
 @click.option("--index-only", is_flag=True, default=False,
               help="Only build RAG index; skip guidance extraction")
 @click.option("--guidance-only", is_flag=True, default=False,
@@ -476,6 +615,8 @@ def main(
     sources_path: str | None,
     ollama_url: str,
     ollama_model: str,
+    vision_model: str | None,
+    skip_vision: bool,
     index_only: bool,
     guidance_only: bool,
     skip_review: bool,
@@ -491,7 +632,12 @@ def main(
 
     # ── Phase 1: RAG index ────────────────────────────────────────────────────
     if not guidance_only:
-        build_rag_index(pdf, ollama_url, sources)
+        effective_vision = None if skip_vision else (vision_model or ollama_model)
+        if effective_vision:
+            console.print(f"[cyan]Vision model:[/cyan] {effective_vision}")
+        else:
+            console.print("[yellow]Vision pass disabled (--skip-vision)[/yellow]")
+        build_rag_index(pdf, ollama_url, sources, effective_vision)
 
     # ── Phase 2: Guidance extraction ──────────────────────────────────────────
     if not index_only:
