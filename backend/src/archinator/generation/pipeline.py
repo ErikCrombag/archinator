@@ -18,6 +18,11 @@ from .prompts import build_system_prompt, build_generation_prompt
 
 log = logging.getLogger(__name__)
 
+
+class OllamaTimeoutError(Exception):
+    """Raised when the Ollama /api/chat endpoint does not respond in time."""
+
+
 _FORMATTERS = {
     OutputFormat.EXCHANGE_XML: exchange_xml.render,
     OutputFormat.JSON: json_fmt.render,
@@ -217,10 +222,17 @@ async def _call_ollama(
             "num_predict": 8192,
         },
     }
-    async with httpx.AsyncClient(timeout=300) as client:
-        r = await client.post(f"{base_url}/api/chat", json=payload)
-        r.raise_for_status()
-        return r.json()["message"]["content"]
+    _timeout = httpx.Timeout(connect=10.0, read=600.0, write=30.0, pool=10.0)
+    try:
+        async with httpx.AsyncClient(timeout=_timeout) as client:
+            r = await client.post(f"{base_url}/api/chat", json=payload)
+            r.raise_for_status()
+            return r.json()["message"]["content"]
+    except httpx.ReadTimeout as exc:
+        raise OllamaTimeoutError(
+            "Ollama did not return a response within 600 s. "
+            "The model may be too slow for the requested token budget on this hardware."
+        ) from exc
 
 
 def _parse_model_json(raw: str) -> ArchiMateModel:

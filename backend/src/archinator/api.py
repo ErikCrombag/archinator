@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from .config import settings
 from .models import CompactionMode, OutputFormat
 from .generation import pipeline
+from .generation.pipeline import OllamaTimeoutError
 from .validation import validator as val_module
 from .validation.rules import VIEWPOINTS
 from .knowledge import rag as rag_module
@@ -92,16 +93,20 @@ async def generate_diagram(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
-    result = await pipeline.generate(
-        query=req.query,
-        formats=formats,
-        compaction=compaction,
-        viewpoint=req.viewpoint,
-        existing_diagram=req.existing_diagram,
-        refinement_query=req.refinement_query,
-        ollama_base_url=settings.ollama_base_url,
-        ollama_model=settings.ollama_model,
-    )
+    try:
+        result = await pipeline.generate(
+            query=req.query,
+            formats=formats,
+            compaction=compaction,
+            viewpoint=req.viewpoint,
+            existing_diagram=req.existing_diagram,
+            refinement_query=req.refinement_query,
+            ollama_base_url=settings.ollama_base_url,
+            ollama_model=settings.ollama_model,
+        )
+    except OllamaTimeoutError as exc:
+        log.error("Ollama generation timed out: %s", exc)
+        raise HTTPException(status_code=504, detail=str(exc))
 
     response: dict = {
         "model_name": result.model.name,
