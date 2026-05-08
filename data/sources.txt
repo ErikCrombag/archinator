@@ -6,6 +6,13 @@
 #   /local/path/books/            — directory: indexes all *.pdf files inside
 #   https://example.com/doc.pdf   — remote PDF (downloaded automatically)
 #   https://example.com/page      — web page (HTML stripped and chunked)
+#
+# The FIRST PDF entry is used as the primary source for guidance extraction
+# (phase 2). Put the main ArchiMate spec book first.
+
+# ── Primary book (guidance extraction source) ─────────────────────────────────
+# Uncomment and set correct filename once copied to data/books/
+/app/data/books/
 
 # ── ArchiMate 3.2 spec chapters (opengroup.org) ───────────────────────────────
 https://pubs.opengroup.org/architecture/archimate32-doc/chap06.html
@@ -17,8 +24,4 @@ https://pubs.opengroup.org/architecture/archimate32-doc/chap11.html
 https://pubs.opengroup.org/architecture/archimate32-doc/apdxc.html
 
 # ── Practical guides and examples ─────────────────────────────────────────────
-https://www.hosiaisluoma.fi/ArchiMate-Cookbook.pdf
 https://www.hosiaisluoma.fi/blog/useful-archimate-diagram-types/
-
-# ── Local books (place PDFs in data/books/) ───────────────────────────────────
-# /app/data/books/
