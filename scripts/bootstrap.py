@@ -39,12 +39,14 @@ Usage:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import click
@@ -129,6 +131,7 @@ def build_rag_index(
     import chromadb  # type: ignore
 
     console.print(Panel("[bold]Phase 1: Building RAG index[/bold]", style="cyan"))
+    phase1_start = time.time()
 
     if CHROMA_DIR.exists():
         console.print(f"[yellow]Removing existing ChromaDB at {CHROMA_DIR}[/yellow]")
@@ -155,11 +158,21 @@ def build_rag_index(
     pending_chunks: list[str] = []
     pending_ids: list[str] = []
     pending_meta: list[dict] = []
+    _batch_num = 0
+    _total_embedded = 0
 
     def flush() -> None:
+        nonlocal _batch_num, _total_embedded
         if not pending_chunks:
             return
+        _batch_num += 1
+        n = len(pending_chunks)
+        t0 = time.time()
+        console.print(f"  [dim]embed batch {_batch_num} ({n} chunks)...[/dim]", end="")
         embeddings = _embed(pending_chunks)
+        elapsed = time.time() - t0
+        _total_embedded += n
+        console.print(f" [green]{elapsed:.1f}s[/green]  total: {_total_embedded}")
         collection.upsert(
             ids=pending_ids,
             documents=pending_chunks,
@@ -225,20 +238,30 @@ def build_rag_index(
     console.print(f"[cyan]Sources file:[/cyan] {sf} — {len(extra_pdf_paths)} PDFs, {len(urls)} URLs")
 
     def _index_pdf_file(pdf_file: Path, label: str, key_prefix: str) -> None:
-        console.print(f"[cyan]Indexing PDF:[/cyan] {label}")
         d = fitz.open(str(pdf_file))
-        for page_num in range(len(d)):
-            text = d[page_num].get_text().strip()
-            if not text:
-                continue
-            view_ref = _detect_view_ref(text)
-            words = text.split()
-            for i in range(0, max(1, len(words) - OVERLAP_WORDS), CHUNK_WORDS - OVERLAP_WORDS):
-                chunk = " ".join(words[i : i + CHUNK_WORDS])
-                meta: dict = {"source": label, "page": page_num + 1, "kind": "book"}
-                if view_ref:
-                    meta["view_ref"] = view_ref
-                add_chunk(chunk, meta, f"{key_prefix}:p{page_num}:w{i}")
+        total = len(d)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+        ) as prog:
+            task = prog.add_task(f"Indexing {label} ({total} pages)...", total=total)
+            for page_num in range(total):
+                text = d[page_num].get_text().strip()
+                if not text:
+                    prog.advance(task)
+                    continue
+                view_ref = _detect_view_ref(text)
+                words = text.split()
+                for i in range(0, max(1, len(words) - OVERLAP_WORDS), CHUNK_WORDS - OVERLAP_WORDS):
+                    chunk = " ".join(words[i : i + CHUNK_WORDS])
+                    meta: dict = {"source": label, "page": page_num + 1, "kind": "book"}
+                    if view_ref:
+                        meta["view_ref"] = view_ref
+                    add_chunk(chunk, meta, f"{key_prefix}:p{page_num}:w{i}")
+                prog.advance(task)
         d.close()
 
     for extra_pdf in extra_pdf_paths:
@@ -282,7 +305,8 @@ def build_rag_index(
                 console.print(f"[yellow]  warning: could not fetch {url}: {exc}[/yellow]")
 
     flush()
-    console.print(f"[green]RAG index ready: {collection.count()} chunks.[/green]")
+    elapsed = time.time() - phase1_start
+    console.print(f"[bold green]RAG index ready: {collection.count()} chunks in {elapsed:.0f}s[/bold green]")
 
 
 # ── Phase 2: Guidance extraction ──────────────────────────────────────────────
@@ -373,16 +397,37 @@ def _fetch_web_for_guidance(sources_file: Path | None = None) -> str:
 
 
 def call_ollama(prompt: str, model: str, base_url: str) -> str:
+    """Call Ollama with streaming — prints tokens live so long runs stay visible."""
     payload = {
         "model": model,
         "prompt": prompt,
-        "stream": False,
+        "stream": True,
         "options": {"temperature": 0.1, "num_predict": 6000},
     }
-    with httpx.Client(timeout=300) as client:
-        r = client.post(f"{base_url}/api/generate", json=payload)
-        r.raise_for_status()
-        return r.json()["response"]
+    console.print(f"\n[dim]{'─' * 60}[/dim]")
+    console.print(f"[cyan]Ollama ({model}) generating — streaming output:[/cyan]\n")
+    t0 = time.time()
+    tokens: list[str] = []
+    with httpx.Client(timeout=600) as client:
+        with client.stream("POST", f"{base_url}/api/generate", json=payload) as r:
+            r.raise_for_status()
+            for line in r.iter_lines():
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                token = data.get("response", "")
+                if token:
+                    print(token, end="", flush=True)
+                    tokens.append(token)
+                if data.get("done"):
+                    break
+    elapsed = time.time() - t0
+    console.print(f"\n\n[dim]{'─' * 60}[/dim]")
+    console.print(f"[green]Done: {len(tokens)} tokens in {elapsed:.1f}s ({len(tokens)/elapsed:.0f} tok/s)[/green]\n")
+    return "".join(tokens)
 
 
 # ── Phase 3: Interactive review ───────────────────────────────────────────────
