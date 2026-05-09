@@ -1,7 +1,9 @@
 from __future__ import annotations
 import json
+import os
 import uuid
 import logging
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -227,12 +229,30 @@ async def _call_ollama(
         async with httpx.AsyncClient(timeout=_timeout) as client:
             r = await client.post(f"{base_url}/api/chat", json=payload)
             r.raise_for_status()
-            return r.json()["message"]["content"]
+            response_text = r.json()["message"]["content"]
+            if os.environ.get("PROMPT_LOG"):
+                _write_prompt_log(messages, response_text)
+            return response_text
     except httpx.ReadTimeout as exc:
         raise OllamaTimeoutError(
             "Ollama did not return a response within 600 s. "
             "The model may be too slow for the requested token budget on this hardware."
         ) from exc
+
+
+_LOG_PATH = Path(os.environ.get("PROMPT_LOG", "prompt.log"))
+_prompt_call_count = 0
+
+
+def _write_prompt_log(messages: list[dict[str, str]], response: str) -> None:
+    global _prompt_call_count
+    _prompt_call_count += 1
+    sep = "=" * 80
+    with _LOG_PATH.open("w", encoding="utf-8") as f:
+        f.write(f"# Ollama prompt log — call {_prompt_call_count}\n\n")
+        for msg in messages:
+            f.write(f"{sep}\n## [{msg['role'].upper()}]\n{sep}\n{msg['content']}\n\n")
+        f.write(f"{sep}\n## [RESPONSE]\n{sep}\n{response}\n")
 
 
 def _parse_model_json(raw: str) -> ArchiMateModel:
