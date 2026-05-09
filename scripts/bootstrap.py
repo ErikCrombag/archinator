@@ -250,7 +250,9 @@ def build_rag_index(
 
     if CHROMA_DIR.exists():
         console.print(f"[yellow]Removing existing ChromaDB at {CHROMA_DIR}[/yellow]")
-        shutil.rmtree(CHROMA_DIR)
+        # rmtree fails on Docker volume mount points (EBUSY) — clear contents instead
+        for _p in CHROMA_DIR.iterdir():
+            shutil.rmtree(_p) if _p.is_dir() else _p.unlink()
 
     embed_base_url = ollama_url
     embed_model_name = os.environ.get("EMBED_MODEL", "nomic-embed-text")
@@ -298,7 +300,12 @@ def build_rag_index(
         pending_ids.clear()
         pending_meta.clear()
 
+    MAX_CHUNK_CHARS = 2000  # nomic-embed-text context ~8192 tokens; 2000 chars ≈ 500 tokens, safe margin
+
     def add_chunk(text: str, meta: dict, key: str) -> None:
+        if not text.strip():
+            return
+        text = text[:MAX_CHUNK_CHARS]
         chunk_id = hashlib.md5(key.encode()).hexdigest()
         pending_chunks.append(text)
         pending_ids.append(chunk_id)
@@ -400,123 +407,136 @@ def build_rag_index(
 
 # ── Phase 2: Guidance extraction ──────────────────────────────────────────────
 
-def _guidance_prompt(pdf_text: str, web_text: str) -> str:
-    return textwrap.dedent(f"""
-        You are an ArchiMate 3.2 modeling expert. Using the source material below,
-        produce a concise reference titled "ArchiMate 3.2 Modeling Guidance".
+_PAGE_PROMPT = textwrap.dedent("""
+    You are an ArchiMate 3.2 modeling expert extracting guidance from a textbook page.
 
-        IMPORTANT: Do NOT reproduce formal rules (element types, relationship aspect pairs,
-        viewpoint element lists). Those are defined elsewhere. Focus exclusively on:
+    Extract ONLY actionable modeling guidance present on this page as concise bullet points:
+    - When/how to use specific elements or relationships
+    - Layer usage patterns and typical structures
+    - Relationship selection heuristics (prefer X over Y when...)
+    - Dos and Don'ts
+    - Anti-patterns and why they are wrong
+    - Viewpoint selection advice
+    - Cross-layer modeling tips
 
-        1. **Layer-by-layer modeling guidance**
-           For each layer (Strategy, Business, Application, Technology, Physical,
-           Motivation, Implementation): when and how to use it, typical patterns,
-           common mistakes.
+    Rules:
+    - Use exact ArchiMate element and relationship type names
+    - Do NOT reproduce formal definitions, diagrams descriptions, or spec tables
+    - If the page contains no actionable modeling guidance, output exactly: SKIP
+    - Output ONLY bullet points, no headers, no preamble
 
-        2. **Relationship selection heuristics**
-           When to prefer Serving vs Association, Realization vs Assignment,
-           Access vs Flow, Influence vs Realization, etc.
-           Concrete examples: "Use Serving when X; use Association when Y."
-
-        3. **Dos and Don'ts** (20–30 bullet points)
-           Practical rules that prevent common modelling errors.
-           Examples:
-           - Do: assign a BusinessRole to a BusinessActor via Assignment
-           - Don't: use Triggering between structure elements
-           - Do: keep Motivation elements in the Motivation layer
-
-        4. **Common anti-patterns** (10–15 items)
-           Patterns that look plausible but violate ArchiMate semantics.
-           Explain why each is wrong and what to use instead.
-
-        5. **Viewpoint selection guidance**
-           How to choose the right viewpoint for a given audience/concern.
-           Brief description of when each standard viewpoint is appropriate.
-
-        6. **Cross-layer modeling tips**
-           How to correctly model the interfaces between layers (realization chains,
-           serving relationships, cross-layer access).
-
-        Be specific and practical. Use exact ArchiMate element and relationship type names.
-        Output ONLY the Markdown document, no preamble or closing remarks.
-
-        --- PDF SOURCE ---
-        {pdf_text[:25000]}
-
-        --- WEB SOURCE ---
-        {web_text[:8000]}
-    """).strip()
+    PAGE CONTENT:
+    {page_text}
+""").strip()
 
 
-def _extract_pdf_for_guidance(pdf_path: Path) -> str:
-    """Extract pages most likely to contain modeling guidance and examples."""
-    import fitz  # type: ignore
-
-    doc = fitz.open(str(pdf_path))
-    guidance_keywords = [
-        "best practice", "guideline", "example", "illustrat", "recommend",
-        "avoid", "do not", "should", "typical", "common", "pattern",
-        "when to use", "instead of", "rather than", "note:", "tip:",
-    ]
-    parts: list[str] = []
-    for page_num in range(len(doc)):
-        text = doc[page_num].get_text().strip()
-        lower = text.lower()
-        if any(kw in lower for kw in guidance_keywords):
-            parts.append(f"[Page {page_num + 1}]\n{text}")
-    doc.close()
-    return "\n\n---\n\n".join(parts)
-
-
-def _fetch_web_for_guidance(sources_file: Path | None = None) -> str:
-    """Fetch non-PDF URLs from sources.txt for use in guidance extraction."""
-    _, urls = parse_sources(sources_file or DEFAULT_SOURCES_FILE)
-    web_urls = [u for u in urls if not u.lower().split("?")[0].endswith(".pdf")]
-    parts: list[str] = []
-    with httpx.Client(timeout=30, follow_redirects=True) as client:
-        for url in web_urls:
-            try:
-                r = client.get(url)
-                r.raise_for_status()
-                text = _strip_html(r.text)
-                parts.append(f"## {url}\n\n{text[:6000]}")
-            except Exception as exc:
-                console.print(f"[yellow]  warning: {url}: {exc}[/yellow]")
-    return "\n\n---\n\n".join(parts)
-
-
-def call_ollama(prompt: str, model: str, base_url: str) -> str:
-    """Call Ollama with streaming — prints tokens live so long runs stay visible."""
+def _call_ollama_page(page_text: str, model: str, base_url: str) -> str:
+    """Single blocking Ollama call for one page. Returns guidance text or empty string."""
+    prompt = _PAGE_PROMPT.format(page_text=page_text[:3000])
     payload = {
         "model": model,
         "prompt": prompt,
-        "stream": True,
-        "options": {"temperature": 0.1, "num_predict": 6000},
+        "stream": False,
+        "options": {"temperature": 0.1, "num_predict": 512, "num_ctx": 4096},
     }
-    console.print(f"\n[dim]{'─' * 60}[/dim]")
-    console.print(f"[cyan]Ollama ({model}) generating — streaming output:[/cyan]\n")
-    t0 = time.time()
-    tokens: list[str] = []
-    with httpx.Client(timeout=600) as client:
-        with client.stream("POST", f"{base_url}/api/generate", json=payload) as r:
-            r.raise_for_status()
-            for line in r.iter_lines():
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                token = data.get("response", "")
-                if token:
-                    print(token, end="", flush=True)
-                    tokens.append(token)
-                if data.get("done"):
-                    break
-    elapsed = time.time() - t0
-    console.print(f"\n\n[dim]{'─' * 60}[/dim]")
-    console.print(f"[green]Done: {len(tokens)} tokens in {elapsed:.1f}s ({len(tokens)/elapsed:.0f} tok/s)[/green]\n")
-    return "".join(tokens)
+    with httpx.Client(timeout=300) as client:
+        r = client.post(f"{base_url}/api/generate", json=payload)
+        r.raise_for_status()
+    text = r.json().get("response", "").strip()
+    if text.upper() == "SKIP" or not text:
+        return ""
+    return text
+
+
+def extract_guidance_from_urls(
+    sources_file: Path | None,
+    model: str,
+    ollama_url: str,
+) -> str:
+    """Fetch each web URL, extract guidance via Ollama, concat results."""
+    _, urls = parse_sources(sources_file or DEFAULT_SOURCES_FILE)
+    web_urls = [u for u in urls if not u.lower().split("?")[0].endswith(".pdf")]
+    if not web_urls:
+        return ""
+
+    sections: list[str] = []
+    console.print(f"[cyan]Processing {len(web_urls)} web sources with {model}...[/cyan]")
+
+    with httpx.Client(timeout=30, follow_redirects=True) as http:
+        for url in web_urls:
+            console.print(f"  [dim]{url}[/dim] ", end="")
+            try:
+                r = http.get(url)
+                r.raise_for_status()
+                text = _strip_html(r.text)
+            except Exception as exc:
+                console.print(f"[yellow]fetch error: {exc}[/yellow]")
+                continue
+
+            try:
+                guidance = _call_ollama_page(text, model, ollama_url)
+            except Exception as exc:
+                console.print(f"[yellow]ollama error: {exc}[/yellow]")
+                guidance = ""
+
+            if guidance:
+                sections.append(f"### {url}\n\n{guidance}")
+                console.print("[green]✓[/green]")
+            else:
+                console.print("[dim]skip[/dim]")
+
+    return "\n\n".join(sections)
+
+
+def extract_guidance_per_page(
+    pdf_path: Path,
+    model: str,
+    ollama_url: str,
+    resume_from: int = 0,
+) -> str:
+    """Extract modeling guidance page-by-page, concat results. Resumable via resume_from."""
+    import fitz  # type: ignore
+
+    doc = fitz.open(str(pdf_path))
+    total = len(doc)
+    sections: list[str] = []
+    skipped = 0
+    t_start = time.time()
+
+    console.print(f"[cyan]Processing {total} pages with {model}...[/cyan]")
+
+    for page_num in range(total):
+        if page_num < resume_from:
+            continue
+
+        page_text = doc[page_num].get_text().strip()
+        if len(page_text) < 100:
+            skipped += 1
+            continue
+
+        console.print(
+            f"  [dim]Page {page_num + 1}/{total}[/dim] ", end=""
+        )
+        try:
+            guidance = _call_ollama_page(page_text, model, ollama_url)
+        except Exception as exc:
+            console.print(f"[yellow]error: {exc}[/yellow]")
+            guidance = ""
+
+        if guidance:
+            sections.append(f"### Page {page_num + 1}\n\n{guidance}")
+            console.print("[green]✓[/green]")
+        else:
+            skipped += 1
+            console.print("[dim]skip[/dim]")
+
+    doc.close()
+    elapsed = time.time() - t_start
+    console.print(
+        f"[green]Done: {len(sections)} pages with guidance, "
+        f"{skipped} skipped, {elapsed:.0f}s elapsed[/green]"
+    )
+    return "\n\n".join(sections)
 
 
 # ── Phase 3: Interactive review ───────────────────────────────────────────────
@@ -554,8 +574,8 @@ def review_draft() -> bool:
               help=f"Sources manifest file (default: data/sources.txt)")
 @click.option("--ollama-url", default="http://localhost:11434", show_default=True)
 @click.option("--ollama-model", default="llama3.3", show_default=True)
-@click.option("--vision-model", default=None,
-              help="Ollama model for diagram vision pass (default: same as --ollama-model). "
+@click.option("--vision-model", default="llava:34b", show_default=True,
+              help="Ollama model for diagram vision pass. "
                    "Use --skip-vision to disable.")
 @click.option("--skip-vision", is_flag=True, default=False,
               help="Skip vision pass — do not describe diagrams")
@@ -596,7 +616,7 @@ def main(
 
     # ── Phase 1: RAG index ────────────────────────────────────────────────────
     if not guidance_only:
-        effective_vision = None if skip_vision else (vision_model or ollama_model)
+        effective_vision = None if skip_vision else vision_model
         if effective_vision:
             console.print(f"[cyan]Vision model:[/cyan] {effective_vision}")
         else:
@@ -605,32 +625,39 @@ def main(
 
     # ── Phase 2: Guidance extraction ──────────────────────────────────────────
     if not index_only and guidance_pdf:
-        console.print(Panel("[bold]Phase 2: Extracting modeling guidance[/bold]", style="cyan"))
+        console.print(Panel("[bold]Phase 2: Extracting modeling guidance (per-page)[/bold]", style="cyan"))
 
-        with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as p:
-            t = p.add_task("Scanning PDF for guidance content...", total=None)
-            pdf_text = _extract_pdf_for_guidance(guidance_pdf)
-            p.update(t, description="Fetching web sources...")
-            web_text = _fetch_web_for_guidance(sources)
+        resume_from = 0
+        existing_pdf_sections = ""
+        if DRAFT_PATH.exists():
+            existing_content = DRAFT_PATH.read_text(encoding="utf-8")
+            resume_from = existing_content.count("\n### Page ")
+            if resume_from:
+                console.print(f"[yellow]Resuming from page {resume_from + 1} (draft has {resume_from} pages)[/yellow]")
+                # Preserve existing PDF sections — strip header and web section
+                web_marker = "\n## Web Sources"
+                body = existing_content.split("\n### Page ", 1)
+                if len(body) > 1:
+                    pdf_part = "### Page " + body[1]
+                    pdf_part = pdf_part.split(web_marker)[0].rstrip()
+                    existing_pdf_sections = pdf_part
 
-        console.print(
-            f"[green]PDF guidance excerpts: {len(pdf_text):,} chars | "
-            f"Web: {len(web_text):,} chars[/green]"
-        )
-
-        prompt = _guidance_prompt(pdf_text, web_text)
-
-        console.print(f"[cyan]Calling Ollama ({ollama_model}) for guidance extraction...[/cyan]")
         try:
-            draft = call_ollama(prompt, ollama_model, ollama_url)
+            new_pdf_sections = extract_guidance_per_page(guidance_pdf, ollama_model, ollama_url, resume_from)
         except Exception as exc:
-            console.print(f"[red]Ollama call failed: {exc}[/red]")
-            console.print("[yellow]Writing raw excerpts as draft for manual editing.[/yellow]")
-            draft = (
-                "# ArchiMate 3.2 Modeling Guidance\n\n"
-                "> AUTO-EXTRACTION FAILED — edit manually.\n\n"
-                + pdf_text[:15000]
-            )
+            console.print(f"[red]Guidance extraction failed: {exc}[/red]")
+            new_pdf_sections = ""
+
+        pdf_sections = "\n\n".join(filter(None, [existing_pdf_sections, new_pdf_sections]))
+
+        web_sections = extract_guidance_from_urls(sources, ollama_model, ollama_url)
+        web_section = f"## Web Sources\n\n{web_sections}" if web_sections else ""
+
+        draft = "\n\n".join(filter(None, [
+            "# ArchiMate 3.2 Modeling Guidance\n\n_Extracted per-page from source material._",
+            pdf_sections,
+            web_section,
+        ]))
 
         DRAFT_PATH.write_text(draft, encoding="utf-8")
         console.print(f"[green]Draft written to {DRAFT_PATH}[/green]")
