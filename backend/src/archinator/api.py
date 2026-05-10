@@ -103,6 +103,7 @@ async def generate_diagram(
             refinement_query=req.refinement_query,
             ollama_base_url=settings.ollama_base_url,
             ollama_model=settings.ollama_model,
+            ollama_num_ctx=settings.ollama_num_ctx,
         )
     except OllamaTimeoutError as exc:
         log.error("Ollama generation timed out: %s", exc)

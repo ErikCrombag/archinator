@@ -8,6 +8,7 @@ class Settings(BaseSettings):
 
     ollama_base_url: str = Field(default="http://localhost:11434", alias="OLLAMA_BASE_URL")
     ollama_model: str = Field(default="llama3.3", alias="OLLAMA_MODEL")
+    ollama_num_ctx: int = Field(default=65536, alias="OLLAMA_NUM_CTX")
     db_path: str = Field(default="data/archinator.db", alias="DB_PATH")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     api_key_header: str = Field(default="X-API-Key", alias="API_KEY_HEADER")

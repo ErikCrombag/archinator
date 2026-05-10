@@ -120,6 +120,7 @@ async def _tool_generate(args: dict) -> list[TextContent]:
         refinement_query=args.get("refinement_query"),
         ollama_base_url=settings.ollama_base_url,
         ollama_model=settings.ollama_model,
+        ollama_num_ctx=settings.ollama_num_ctx,
     )
     response: dict = {
         "model_name": result.model.name,

@@ -44,6 +44,7 @@ async def generate(
     refinement_query: str | None,
     ollama_base_url: str,
     ollama_model: str,
+    ollama_num_ctx: int = 65536,
 ) -> GenerationResult:
     rag_chunks = rag.query(query, n_results=5)
 
@@ -57,7 +58,7 @@ async def generate(
     )
 
     model, attempts = await _generate_with_retries(
-        system_prompt, user_prompt, ollama_base_url, ollama_model, viewpoint
+        system_prompt, user_prompt, ollama_base_url, ollama_model, viewpoint, ollama_num_ctx
     )
 
     full_validation = validator.validate(model, viewpoint=viewpoint)
@@ -107,6 +108,7 @@ async def _generate_with_retries(
     base_url: str,
     model_name: str,
     viewpoint: str | None,
+    num_ctx: int = 65536,
 ) -> tuple[ArchiMateModel, int]:
     """
     Self-correcting generation loop using multi-turn conversation.
@@ -127,7 +129,7 @@ async def _generate_with_retries(
     best_model: ArchiMateModel | None = None
 
     for attempt in range(1, MAX_RETRIES + 1):
-        raw = await _call_ollama(messages, base_url, model_name)
+        raw = await _call_ollama(messages, base_url, model_name, num_ctx)
 
         # ── Parse ─────────────────────────────────────────────────────────────
         try:
@@ -175,7 +177,7 @@ async def _generate_with_retries(
 
     # Parsing never succeeded — one final attempt with the accumulated context
     log.warning("Parsing never succeeded; making final unconstrained attempt.")
-    raw = await _call_ollama(messages, base_url, model_name)
+    raw = await _call_ollama(messages, base_url, model_name, num_ctx)
     return _parse_model_json(raw), MAX_RETRIES + 1
 
 
@@ -212,6 +214,7 @@ async def _call_ollama(
     messages: list[dict[str, str]],
     base_url: str,
     model_name: str,
+    num_ctx: int = 65536,
 ) -> str:
     """Call Ollama /api/chat with a full message history."""
     payload: dict[str, Any] = {
@@ -222,6 +225,7 @@ async def _call_ollama(
         "options": {
             "temperature": 0.2,
             "num_predict": 8192,
+            "num_ctx": num_ctx,
         },
     }
     _timeout = httpx.Timeout(connect=10.0, read=600.0, write=30.0, pool=10.0)
