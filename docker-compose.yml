@@ -19,6 +19,7 @@ services:
     environment:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama4:16x17b}
+      OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-65536}
       EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
       DB_PATH: /app/data/archinator.db
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
