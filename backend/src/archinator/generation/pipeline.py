@@ -45,8 +45,15 @@ async def generate(
     ollama_base_url: str,
     ollama_model: str,
     ollama_num_ctx: int = 65536,
+    ollama_api_key: str = "",
 ) -> GenerationResult:
     rag_chunks = rag.query(query, n_results=5)
+
+    log.info(
+        "Starting pipeline: url=%s model=%s num_ctx=%d api_key=%s",
+        ollama_base_url, ollama_model, ollama_num_ctx,
+        "set" if ollama_api_key else "not set",
+    )
 
     system_prompt = build_system_prompt()
     user_prompt = build_generation_prompt(
@@ -57,9 +64,13 @@ async def generate(
         refinement_query=refinement_query,
     )
 
+    log.debug("Prompts built (system=%d chars, user=%d chars)", len(system_prompt), len(user_prompt))
+
     model, attempts = await _generate_with_retries(
-        system_prompt, user_prompt, ollama_base_url, ollama_model, viewpoint, ollama_num_ctx
+        system_prompt, user_prompt, ollama_base_url, ollama_model, viewpoint, ollama_num_ctx, ollama_api_key
     )
+
+    log.debug('Generated model')
 
     full_validation = validator.validate(model, viewpoint=viewpoint)
     best_effort = not full_validation.valid
@@ -109,6 +120,7 @@ async def _generate_with_retries(
     model_name: str,
     viewpoint: str | None,
     num_ctx: int = 65536,
+    api_key: str = "",
 ) -> tuple[ArchiMateModel, int]:
     """
     Self-correcting generation loop using multi-turn conversation.
@@ -129,7 +141,8 @@ async def _generate_with_retries(
     best_model: ArchiMateModel | None = None
 
     for attempt in range(1, MAX_RETRIES + 1):
-        raw = await _call_ollama(messages, base_url, model_name, num_ctx)
+        log.debug("Generation attempt %d/%d", attempt, MAX_RETRIES)
+        raw = await _call_ollama(messages, base_url, model_name, num_ctx, api_key)
 
         # ── Parse ─────────────────────────────────────────────────────────────
         try:
@@ -177,7 +190,7 @@ async def _generate_with_retries(
 
     # Parsing never succeeded — one final attempt with the accumulated context
     log.warning("Parsing never succeeded; making final unconstrained attempt.")
-    raw = await _call_ollama(messages, base_url, model_name, num_ctx)
+    raw = await _call_ollama(messages, base_url, model_name, num_ctx, api_key)
     return _parse_model_json(raw), MAX_RETRIES + 1
 
 
@@ -215,8 +228,12 @@ async def _call_ollama(
     base_url: str,
     model_name: str,
     num_ctx: int = 65536,
+    api_key: str = "",
 ) -> str:
     """Call Ollama /api/chat with a full message history."""
+    import time
+
+    url = f"{base_url.rstrip('/')}/api/chat"
     payload: dict[str, Any] = {
         "model": model_name,
         "messages": messages,
@@ -228,20 +245,47 @@ async def _call_ollama(
             "num_ctx": num_ctx,
         },
     }
+    headers: dict[str, str] = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    log.debug(
+        "POST %s  model=%s  messages=%d  auth=%s",
+        url, model_name, len(messages),
+        "Bearer ***" if api_key else "none",
+    )
+
     _timeout = httpx.Timeout(connect=10.0, read=600.0, write=30.0, pool=10.0)
+    t0 = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=_timeout) as client:
-            r = await client.post(f"{base_url}/api/chat", json=payload)
+            r = await client.post(url, json=payload, headers=headers)
+            elapsed = time.monotonic() - t0
+            log.debug("Response: status=%d  elapsed=%.1fs", r.status_code, elapsed)
+            if r.status_code >= 400:
+                log.error(
+                    "Ollama error %d from %s — body: %s",
+                    r.status_code, url, r.text[:500],
+                )
             r.raise_for_status()
-            response_text = r.json()["message"]["content"]
+            data = r.json()
+            response_text = data["message"]["content"]
+            log.debug("Response content length: %d chars", len(response_text))
             if os.environ.get("PROMPT_LOG"):
                 _write_prompt_log(messages, response_text)
             return response_text
+    except httpx.ConnectError as exc:
+        log.error("Connection failed to %s: %s", url, exc)
+        raise
     except httpx.ReadTimeout as exc:
+        log.error("Read timeout after %.1fs from %s", time.monotonic() - t0, url)
         raise OllamaTimeoutError(
             "Ollama did not return a response within 600 s. "
             "The model may be too slow for the requested token budget on this hardware."
         ) from exc
+    except httpx.HTTPStatusError as exc:
+        log.error("HTTP error from %s: %s", url, exc)
+        raise
 
 
 _LOG_PATH = Path(os.environ.get("PROMPT_LOG", "prompt.log"))

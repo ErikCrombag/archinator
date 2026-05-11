@@ -121,6 +121,7 @@ async def _tool_generate(args: dict) -> list[TextContent]:
         ollama_base_url=settings.ollama_base_url,
         ollama_model=settings.ollama_model,
         ollama_num_ctx=settings.ollama_num_ctx,
+        ollama_api_key=settings.ollama_api_key,
     )
     response: dict = {
         "model_name": result.model.name,

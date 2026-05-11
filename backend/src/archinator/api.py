@@ -87,6 +87,8 @@ async def generate_diagram(
     req: GenerateRequest,
     _auth=Depends(require_api_key),
 ):
+    log.debug(f"Starting generation of diagram via /generate API call.\nFormats: {'.'.join(req.formats)}\nCompaction: {req.compaction}\nViewpoint: {req.viewpoint}")
+
     try:
         formats = [OutputFormat(f) for f in req.formats]
         compaction = CompactionMode(req.compaction)
@@ -104,10 +106,13 @@ async def generate_diagram(
             ollama_base_url=settings.ollama_base_url,
             ollama_model=settings.ollama_model,
             ollama_num_ctx=settings.ollama_num_ctx,
+            ollama_api_key=settings.ollama_api_key,
         )
     except OllamaTimeoutError as exc:
         log.error("Ollama generation timed out: %s", exc)
         raise HTTPException(status_code=504, detail=str(exc))
+
+    log.debug("Ollama generation completed")
 
     response: dict = {
         "model_name": result.model.name,
