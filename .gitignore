@@ -36,3 +36,4 @@ frontend/.env
 .idea/
 .vscode/
 *.iml
+/.claude/ssh.md
