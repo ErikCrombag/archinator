@@ -84,3 +84,20 @@ export async function createApiKey(
 export async function revokeApiKey(id: string): Promise<void> {
   return request<void>(`/admin/keys/${id}`, { method: 'DELETE' });
 }
+
+export async function previewPlantuml(source: string): Promise<string> {
+  const apiKey = getStoredApiKey();
+  const res = await fetch(`${API_URL}/preview/plantuml`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'text/plain',
+      ...(apiKey ? { 'X-API-Key': apiKey } : {}),
+    },
+    body: source,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${res.status}: ${text.slice(0, 300)}`);
+  }
+  return res.text(); // SVG string
+}

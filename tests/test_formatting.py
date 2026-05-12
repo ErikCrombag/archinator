@@ -229,6 +229,7 @@ def test_plantuml_contains_archimate_include():
     m = _sample_model()
     rendered = plantuml.render(m)
     assert "!include <archimate/Archimate>" in rendered
+    assert "archimate" in rendered
 
 
 def test_plantuml_contains_relationships():

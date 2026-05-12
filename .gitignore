@@ -37,3 +37,6 @@ frontend/.env
 .vscode/
 *.iml
 /.claude/ssh.md
+
+# PlantUML JAR (download manually: scripts/download_plantuml.sh)
+lib/plantuml.jar

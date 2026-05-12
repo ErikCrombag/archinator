@@ -14,18 +14,23 @@ _LAYER_LABELS = {
 }
 
 # Relationship type → Mermaid arrow style
+# Mermaid flowchart arrows mapped to ArchiMate 3.2 visual notation:
+#   Structural:  solid lines  (--o diamond-ish, --> arrow)
+#   Dependency:  dashed lines (-.->)
+#   Dynamic:     thick (==>) for Triggering, dashed for Flow
+#   Other:       solid for Specialization
 _ARROW = {
-    "Composition":   "-->",
-    "Aggregation":   "-->",
-    "Assignment":    "-->",
-    "Realization":   "-.->",
-    "Serving":       "-->",
-    "Access":        "-.->",
-    "Influence":     "-.->",
-    "Association":   "---",
-    "Triggering":    "==>",
-    "Flow":          "-->",
-    "Specialization":"-->",
+    "Composition":   "--o",   # hollow circle ≈ diamond (Mermaid has no diamond)
+    "Aggregation":   "--o",   # same — Mermaid doesn't distinguish filled/hollow diamond
+    "Assignment":    "o-->",  # circle at source, arrow at target
+    "Realization":   "-.->",  # dashed, open arrowhead
+    "Serving":       "-.->",  # dashed, open arrowhead (dependency)
+    "Access":        "-.->",  # dashed, open arrowhead
+    "Influence":     "-.->",  # dashed, open arrowhead
+    "Association":   "-->",   # solid, open arrowhead
+    "Triggering":    "==>",   # thick solid (dynamic)
+    "Flow":          "-.->",  # dashed (dynamic dependency)
+    "Specialization":"-->",   # solid, open arrowhead (closest to hollow triangle)
 }
 
 

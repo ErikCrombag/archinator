@@ -6,6 +6,12 @@ _ELEMENT_LIST = ", ".join(sorted(ELEMENT_TYPES.keys()))
 _RELATIONSHIP_LIST = ", ".join(sorted(RELATIONSHIP_TYPES))
 _VIEWPOINT_LIST = ", ".join(sorted(VIEWPOINTS.keys()))
 
+# Explicit type → layer + aspect table — eliminates the most common failure mode
+_ELEMENT_TABLE = "\n".join(
+    f"  {etype}: layer={meta['layer']}, aspect={meta['aspect']}"
+    for etype, meta in sorted(ELEMENT_TYPES.items())
+)
+
 SYSTEM_PROMPT = """\
 You are an ArchiMate 3.2 expert that generates valid architectural diagrams.
 
@@ -49,8 +55,9 @@ Schema:
   ]
 }}
 
-## Valid element types
-{element_list}
+## Element types — exact layer and aspect required for each
+Every element MUST use exactly the layer and aspect listed here. No exceptions.
+{element_table}
 
 ## Valid relationship types
 {relationship_list}
@@ -61,12 +68,15 @@ Schema:
 ## Strict rules
 - Use ONLY element types from the list above. Never invent new types.
 - Use ONLY relationship types from the list above.
-- Assign correct layer and aspect to every element.
+- layer and aspect for each element MUST match the table above exactly.
 - Relationship source_id and target_id MUST reference existing element ids.
-- Apply correct layer directionality: Realization goes from lower to higher layer.
-  Serving goes from provider layer to consumer layer (typically lower to higher).
-- Composition/Aggregation must respect containment semantics.
 - Every element id and relationship id must be unique within the model.
+- Realization: lower layer realizes higher layer (e.g. ApplicationService realizes BusinessService).
+- Serving: provider serves consumer (e.g. ApplicationService serves BusinessProcess).
+- Assignment: actor/role assigned to behavior (e.g. BusinessRole assigned to BusinessProcess).
+- Composition/Aggregation: same-layer containment preferred.
+- Access: set access_type to "Read", "Write", or "ReadWrite" based on whether the element reads, writes, or both accesses the data object. Never leave access_type null for Access relationships.
+- Association: set name to describe the relationship if directed; leave name null for undirected.
 - If a viewpoint is requested, include only elements and relationships valid for that viewpoint.
 
 ## ArchiMate 3.2 Semantic Core Reference
@@ -76,7 +86,7 @@ Schema:
 
 def build_system_prompt() -> str:
     return SYSTEM_PROMPT.format(
-        element_list=_ELEMENT_LIST,
+        element_table=_ELEMENT_TABLE,
         relationship_list=_RELATIONSHIP_LIST,
         viewpoint_list=_VIEWPOINT_LIST,
         semantic_core=load_semantic_core(),

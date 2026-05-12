@@ -1,11 +1,14 @@
 """FastAPI HTTP layer — wraps MCP tools for browser + programmatic access."""
 from __future__ import annotations
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
-from fastapi import FastAPI, HTTPException, Security, Header, Depends
+import httpx
+from fastapi import FastAPI, HTTPException, Security, Header, Depends, Request
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -110,8 +113,17 @@ async def generate_diagram(
             ollama_api_key=settings.ollama_api_key,
         )
     except OllamaTimeoutError as exc:
-        log.error("Ollama generation timed out: %s", exc)
+        log.error("Ollama timeout: %s", exc)
         raise HTTPException(status_code=504, detail=str(exc))
+    except pipeline.OllamaConnectionError as exc:
+        log.error("Ollama connection error: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+    except Exception as exc:
+        log.exception("Generation failed: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Generation failed: {type(exc).__name__}: {exc}",
+        )
 
     log.debug("Ollama generation completed")
 
@@ -233,6 +245,64 @@ async def revoke_api_key(key_id: int, _auth=Depends(require_api_key)):
     if not ok:
         raise HTTPException(status_code=404, detail="Key not found")
     return {"revoked": True}
+
+
+# ── PlantUML render — local JAR preferred, kroki.io fallback ─────────────────
+
+async def _render_plantuml_jar(source: str, jar_path: str) -> bytes:
+    """Render PlantUML source to SVG via local JAR (subprocess, async)."""
+    proc = await asyncio.create_subprocess_exec(
+        "java", "-jar", jar_path, "-tsvg", "-pipe", "-charset", "UTF-8",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await asyncio.wait_for(proc.communicate(source.encode("utf-8")), timeout=60)
+    if proc.returncode != 0:
+        err = stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"PlantUML JAR error (exit {proc.returncode}): {err[:300]}")
+    return stdout
+
+
+async def _render_plantuml_kroki(source: str) -> bytes:
+    """Render PlantUML source to SVG via kroki.io (fallback)."""
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        r = await client.post(
+            "https://kroki.io/plantuml/svg",
+            content=source.encode("utf-8"),
+            headers={"Content-Type": "text/plain"},
+        )
+        r.raise_for_status()
+        return r.content
+
+
+@app.post("/preview/plantuml")
+async def preview_plantuml(request: Request, _auth=Depends(require_api_key)):
+    source = (await request.body()).decode("utf-8")
+    if not source.strip():
+        raise HTTPException(status_code=422, detail="Empty diagram source")
+
+    jar_path = settings.plantuml_jar
+    use_jar = os.path.isfile(jar_path)
+
+    try:
+        if use_jar:
+            log.debug("Rendering PlantUML via local JAR: %s", jar_path)
+            svg = await _render_plantuml_jar(source, jar_path)
+        else:
+            log.debug("PlantUML JAR not found at %s — falling back to kroki.io", jar_path)
+            svg = await _render_plantuml_kroki(source)
+        return Response(content=svg, media_type="image/svg+xml")
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="PlantUML render timed out")
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="kroki.io timed out")
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502,
+                            detail=f"kroki.io {exc.response.status_code}: {exc.response.text[:300]}")
+    except Exception as exc:
+        log.error("PlantUML render error: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # ── Health ────────────────────────────────────────────────────────────────────

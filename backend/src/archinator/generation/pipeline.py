@@ -17,12 +17,16 @@ from ..validation import validator
 from ..formatting import exchange_xml, json_fmt, mermaid as mermaid_fmt, plantuml as plantuml_fmt
 from ..compaction.compact import compact_model
 from .prompts import build_system_prompt, build_generation_prompt
+from .schema import build_ollama_schema
 
 log = logging.getLogger(__name__)
 
 
 class OllamaTimeoutError(Exception):
     """Raised when the Ollama /api/chat endpoint does not respond in time."""
+
+class OllamaConnectionError(Exception):
+    """Raised when the Ollama /api/chat endpoint cannot be reached or returns an unexpected error."""
 
 
 _FORMATTERS = {
@@ -238,7 +242,7 @@ async def _call_ollama(
         "model": model_name,
         "messages": messages,
         "stream": False,
-        "format": "json",
+        "format": build_ollama_schema(),
         "options": {
             "temperature": 0.2,
             "num_predict": 8192,
@@ -270,13 +274,16 @@ async def _call_ollama(
             r.raise_for_status()
             data = r.json()
             response_text = data["message"]["content"]
+            if not response_text or not response_text.strip():
+                log.error("Ollama returned empty content. Full response: %s", data)
+                raise ValueError("Ollama returned empty content")
             log.debug("Response content length: %d chars", len(response_text))
             if os.environ.get("PROMPT_LOG"):
                 _write_prompt_log(messages, response_text)
             return response_text
     except httpx.ConnectError as exc:
         log.error("Connection failed to %s: %s", url, exc)
-        raise
+        raise OllamaConnectionError(f"Cannot connect to Ollama at {url}: {exc}") from exc
     except httpx.ReadTimeout as exc:
         log.error("Read timeout after %.1fs from %s", time.monotonic() - t0, url)
         raise OllamaTimeoutError(
@@ -285,7 +292,12 @@ async def _call_ollama(
         ) from exc
     except httpx.HTTPStatusError as exc:
         log.error("HTTP error from %s: %s", url, exc)
-        raise
+        raise OllamaConnectionError(
+            f"Ollama returned HTTP {exc.response.status_code}: {exc.response.text[:300]}"
+        ) from exc
+    except (KeyError, ValueError) as exc:
+        log.error("Unexpected Ollama response shape from %s: %s", url, exc)
+        raise OllamaConnectionError(f"Unexpected Ollama response: {exc}") from exc
 
 
 _LOG_PATH = Path(os.environ.get("PROMPT_LOG", "prompt.log"))
@@ -306,11 +318,18 @@ def _write_prompt_log(messages: list[dict[str, str]], response: str) -> None:
 def _parse_model_json(raw: str) -> ArchiMateModel:
     # Strip any accidental markdown fences
     raw = raw.strip()
+    if not raw:
+        raise ValueError("Model returned empty response — cannot parse JSON")
+
     if raw.startswith("```"):
         raw = raw.split("```", 2)[1]
         if raw.startswith("json"):
             raw = raw[4:]
         raw = raw.rsplit("```", 1)[0]
+
+    raw = raw.strip()
+    if not raw:
+        raise ValueError("Response contained only a markdown fence with no JSON body")
 
     data: dict[str, Any] = json.loads(raw)
 

@@ -1,18 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import mermaid from 'mermaid';
-import pako from 'pako';
+import { previewPlantuml } from '../api';
 import type { OutputFormat } from '../types';
-
-function encodeForKroki(source: string): string {
-  const data = new TextEncoder().encode(source);
-  const compressed = pako.deflate(data);
-  // avoid spread on large arrays (call stack limit)
-  let binary = '';
-  for (let i = 0; i < compressed.length; i++) {
-    binary += String.fromCharCode(compressed[i]);
-  }
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_');
-}
 
 interface OutputViewerProps {
   format: OutputFormat;
@@ -27,6 +16,7 @@ export function OutputViewer({ format, content }: OutputViewerProps) {
   const [renderError, setRenderError] = useState<string>('');
   const idRef = useRef<string>(`mermaid-${++mermaidCounter}`);
 
+  // Mermaid: render client-side
   useEffect(() => {
     if (format !== 'mermaid') return;
     let cancelled = false;
@@ -47,9 +37,22 @@ export function OutputViewer({ format, content }: OutputViewerProps) {
     }
 
     render();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
+  }, [format, content]);
+
+  // PlantUML: proxy through backend → kroki.io (avoids browser CORS restriction)
+  useEffect(() => {
+    if (format !== 'plantuml' || !content) return;
+    let cancelled = false;
+
+    setSvgContent('');
+    setRenderError('');
+
+    previewPlantuml(content)
+      .then(svg => { if (!cancelled) setSvgContent(svg); })
+      .catch(err => { if (!cancelled) setRenderError(err instanceof Error ? err.message : String(err)); });
+
+    return () => { cancelled = true; };
   }, [format, content]);
 
   function handleCopy() {
@@ -86,14 +89,14 @@ export function OutputViewer({ format, content }: OutputViewerProps) {
         </pre>
       </div>
 
-      {/* Mermaid diagram render */}
+      {/* Mermaid preview — rendered client-side */}
       {format === 'mermaid' && (
         <div>
           <div className="mb-2 text-xs font-semibold uppercase tracking-widest text-gray-400">
             Diagram Preview
           </div>
           {renderError ? (
-            <div className="rounded border border-red-700 bg-red-950/40 p-3 text-xs text-red-300">
+            <div className="rounded border border-red-700 bg-red-950/40 p-3 font-mono text-xs text-red-300 whitespace-pre-wrap">
               Mermaid render error: {renderError}
             </div>
           ) : svgContent ? (
@@ -109,28 +112,26 @@ export function OutputViewer({ format, content }: OutputViewerProps) {
         </div>
       )}
 
-      {/* PlantUML diagram render via kroki.io */}
+      {/* PlantUML preview — POST to kroki.io, render inline SVG */}
       {format === 'plantuml' && content && (
         <div>
           <div className="mb-2 text-xs font-semibold uppercase tracking-widest text-gray-400">
             Diagram Preview
           </div>
-          <div className="overflow-auto rounded border border-gray-600 bg-white p-4">
-            <img
-              src={`https://kroki.io/plantuml/svg/${encodeForKroki(content)}`}
-              alt="PlantUML diagram"
-              className="max-w-full min-h-48 w-full object-contain"
-              onError={(e) => {
-                (e.currentTarget as HTMLImageElement).style.display = 'none';
-                (e.currentTarget.nextSibling as HTMLElement | null)?.style.setProperty('display', 'block');
-              }}
-            />
-            <div
-              className="hidden rounded border border-red-700 bg-red-950/40 p-3 text-xs text-red-300"
-            >
-              PlantUML render failed — check kroki.io reachability or diagram syntax.
+          {renderError ? (
+            <div className="rounded border border-red-700 bg-red-950/40 p-3 font-mono text-xs text-red-300 whitespace-pre-wrap">
+              PlantUML render error: {renderError}
             </div>
-          </div>
+          ) : svgContent ? (
+            <div
+              className="overflow-auto rounded border border-gray-600 bg-white p-4"
+              dangerouslySetInnerHTML={{ __html: svgContent }}
+            />
+          ) : (
+            <div className="flex h-24 items-center justify-center rounded border border-gray-700 bg-gray-900 text-xs text-gray-500">
+              Rendering diagram…
+            </div>
+          )}
         </div>
       )}
     </div>

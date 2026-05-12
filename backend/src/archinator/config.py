@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     ollama_num_ctx: int = Field(default=65536, alias="OLLAMA_NUM_CTX")
     ollama_api_key: str = Field(default="", alias="OLLAMA_API_KEY")
     ollama_prompt_log: str = Field(default="", alias="OLLAMA_PROMPT_LOG")
+    plantuml_jar: str = Field(default="lib/plantuml.jar", alias="PLANTUML_JAR")
     db_path: str = Field(default="data/archinator.db", alias="DB_PATH")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     api_key_header: str = Field(default="X-API-Key", alias="API_KEY_HEADER")

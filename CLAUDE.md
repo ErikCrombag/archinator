@@ -96,12 +96,42 @@ API keys stored in SQLite (`data/archinator.db`). Keys are SHA-256 hashed; only 
 - `data/semantic_core.md` is committed (human-reviewed); `data/chroma/` and `data/archinator.db` are gitignored.
 - Ollama is called via `/api/chat` with `format: "json"` — requires a model that respects JSON mode. `llama3.3` is the tested default.
 
+## SSH
+
+SSH settings and commands can be found in `.claude/ssh.md`
+
+## Test Prompts
+
+ArchiMate prompts that exercise different layers/viewpoints:
+
+### Motivation layer
+
+Map the strategic drivers and goals for a retail bank launching a mobile payment product. Include stakeholders, business drivers, goals, and requirements.
+
+### Application layer
+
+Design the application architecture for an e-commerce order management system. Show the application components, services, and data objects involved in order processing.
+
+### Cross-layer (Business + Application + Technology)
+
+Model a CI/CD pipeline for a software delivery organization. Show the business process, supporting application toolchain, and underlying infrastructure.
+
+### Technology layer
+
+Design the infrastructure architecture for a Kubernetes-hosted microservices platform. Include nodes, devices, system software, and network components.
+
+### Motivation + Business
+
+Model the capability map for a logistics company expanding into same-day delivery. Show capabilities, value streams, business processes, and key roles.
+
+### Implementation & Migration
+
+Create a migration roadmap for moving a monolithic ERP system to a cloud-native architecture. Show work packages, plateaus, and gaps.
+
 ## Open / next session
 
 **Needs user input before proceeding:**
-- Ollama hostname/port on the AI server (update `.env` / `docker-compose.yml`)
-- Set up CICD pipeline (+SSH credentials for deployment to AI server)
-- How to get `archimate_spec.pdf` onto the server (`data/` volume mount path)
+- Set up CICD pipeline (SSH key above can be used for deployment)
 - OpenGroup website URL(s) to use in `scripts/bootstrap.py` (default list in script may need adjustment)
 
 **Frontend not yet built** (`frontend/` dir exists but is empty):
