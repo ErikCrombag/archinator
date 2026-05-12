@@ -5,7 +5,7 @@ WORKDIR /app
 # System deps for lxml + sentence-transformers
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libxml2-dev libxslt-dev build-essential \
-    default-jre-headless curl \
+    default-jre-headless curl graphviz \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/pyproject.toml .
