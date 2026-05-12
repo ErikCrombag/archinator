@@ -1,6 +1,7 @@
 """FastAPI HTTP layer — wraps MCP tools for browser + programmatic access."""
 from __future__ import annotations
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
@@ -244,7 +245,8 @@ async def health():
 def main() -> None:
     import uvicorn
     logging.basicConfig(level=settings.log_level)
-    uvicorn.run("archinator.api:app", host="0.0.0.0", port=8000, reload=False)
+    reload = os.getenv("DEV", "").lower() in ("1", "true", "yes")
+    uvicorn.run("archinator.api:app", host="0.0.0.0", port=8000, reload=reload)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import mermaid from 'mermaid';
+import pako from 'pako';
 import type { OutputFormat } from '../types';
+
+function encodeForKroki(source: string): string {
+  const data = new TextEncoder().encode(source);
+  const compressed = pako.deflate(data);
+  // avoid spread on large arrays (call stack limit)
+  let binary = '';
+  for (let i = 0; i < compressed.length; i++) {
+    binary += String.fromCharCode(compressed[i]);
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_');
+}
 
 interface OutputViewerProps {
   format: OutputFormat;
@@ -94,6 +106,31 @@ export function OutputViewer({ format, content }: OutputViewerProps) {
               Rendering diagram…
             </div>
           )}
+        </div>
+      )}
+
+      {/* PlantUML diagram render via kroki.io */}
+      {format === 'plantuml' && content && (
+        <div>
+          <div className="mb-2 text-xs font-semibold uppercase tracking-widest text-gray-400">
+            Diagram Preview
+          </div>
+          <div className="overflow-auto rounded border border-gray-600 bg-white p-4">
+            <img
+              src={`https://kroki.io/plantuml/svg/${encodeForKroki(content)}`}
+              alt="PlantUML diagram"
+              className="max-w-full min-h-48 w-full object-contain"
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).style.display = 'none';
+                (e.currentTarget.nextSibling as HTMLElement | null)?.style.setProperty('display', 'block');
+              }}
+            />
+            <div
+              className="hidden rounded border border-red-700 bg-red-950/40 p-3 text-xs text-red-300"
+            >
+              PlantUML render failed — check kroki.io reachability or diagram syntax.
+            </div>
+          </div>
         </div>
       )}
     </div>

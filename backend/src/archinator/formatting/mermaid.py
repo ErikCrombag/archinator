@@ -15,13 +15,13 @@ _LAYER_LABELS = {
 
 # Relationship type → Mermaid arrow style
 _ARROW = {
-    "Composition":   "--*",
-    "Aggregation":   "--o",
+    "Composition":   "-->",
+    "Aggregation":   "-->",
     "Assignment":    "-->",
     "Realization":   "-.->",
     "Serving":       "-->",
     "Access":        "-.->",
-    "Influence":     "-->>",
+    "Influence":     "-.->",
     "Association":   "---",
     "Triggering":    "==>",
     "Flow":          "-->",
@@ -52,7 +52,7 @@ def render(model: ArchiMateModel) -> str:
         src = _safe_id(r.source_id)
         tgt = _safe_id(r.target_id)
         arrow = _ARROW.get(r.type, "-->")
-        label = f'|"{r.type}"|' if r.name is None else f'|"{r.type}: {r.name}"|'
+        label = f'|{r.type}|' if r.name is None else f'|{r.type}: {r.name}|'
         lines.append(f"  {src} {arrow}{label} {tgt}")
 
     return "\n".join(lines)
