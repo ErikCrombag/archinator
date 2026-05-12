@@ -22,6 +22,7 @@ services:
       OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-65536}
       EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
       DB_PATH: /app/data/archinator.db
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     networks:
       - internal
