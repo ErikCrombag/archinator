@@ -22,7 +22,7 @@ jobs:
           cache: pip
 
       - name: Install backend deps
-        run: pip install -e "backend/[dev]" lxml pytest
+        run: pip install -e "backend/[dev]" lxml pytest pytest-asyncio
 
       - name: Run tests
         run: python -m pytest tests/ -v -m "not integration"
