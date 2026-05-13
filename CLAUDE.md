@@ -130,12 +130,5 @@ Create a migration roadmap for moving a monolithic ERP system to a cloud-native 
 
 ## Open / next session
 
-**Needs user input before proceeding:**
-- Set up CICD pipeline (SSH key above can be used for deployment)
-- OpenGroup website URL(s) to use in `scripts/bootstrap.py` (default list in script may need adjustment)
-
-**Frontend not yet built** (`frontend/` dir exists but is empty):
-- React + Vite app per plan: diagram generator UI + admin panel
-- `frontend/Dockerfile` needed (nginx serving Vite build)
-- API base URL via `VITE_API_URL` env var (already in `docker-compose.yml`)
-- Admin panel routes should only render for Authentik admin role (role comes in as a forwarded header from Caddy)
+- Test MCP server behaviour
+- Discussion on RAG/training strategy.

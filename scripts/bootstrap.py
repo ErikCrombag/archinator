@@ -137,7 +137,7 @@ def _describe_diagram(img_b64: str, page_num: int, view_ref: str | None,
             "stream": False,
             "options": {"temperature": 0.1, "num_predict": 1024},
         }
-        with httpx.Client(timeout=120) as client:
+        with httpx.Client(timeout=900) as client:
             r = client.post(f"{ollama_url}/api/generate", json=payload)
             r.raise_for_status()
             text = r.json().get("response", "").strip()

@@ -1,0 +1,30 @@
+archinator.crombag.me {
+    import tls_modern
+    route {
+        @static path /assets/* /env-config.js /favicon.ico /vite.svg
+        handle @static {
+            reverse_proxy 100.122.143.53:3001
+        }
+        handle /outpost.goauthentik.io/* {
+            reverse_proxy authentik-server:9000
+        }
+        @mcp path /mcp /mcp/messages/*
+        handle @mcp {
+            reverse_proxy 100.122.143.53:8000 {
+                flush_interval -1
+            }
+        }
+        handle {
+            forward_auth authentik-server:9000 {
+                uri /outpost.goauthentik.io/auth/caddy
+                copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Email X-Authentik-Name X-Authentik-Uid X-Authentik-Jwt X-Authentik-Meta-Jwks X-Authentik-Meta-Outpost X-Authentik-Meta-Provider X-Authentik-Meta-App X-Authentik-Meta-Version
+                trusted_proxies private_ranges
+                header_up X-Forwarded-Proto https
+                header_up X-Forwarded-Host archinator.crombag.me
+                header_up X-Forwarded-Uri {http.request.orig_uri}
+                header_up X-Original-URL https://archinator.crombag.me{http.request.orig_uri}
+            }
+            reverse_proxy 100.122.143.53:3001
+        }
+    }
+}

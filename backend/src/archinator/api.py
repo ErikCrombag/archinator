@@ -21,6 +21,8 @@ from .validation.rules import VIEWPOINTS
 from .knowledge import rag as rag_module
 from .auth import api_keys
 from . import _parse_diagram_input
+from mcp.server.sse import SseServerTransport
+from .server import app as mcp_server
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +47,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+_sse = SseServerTransport("/mcp/messages/")
 
 
 # ── Auth dependency ───────────────────────────────────────────────────────────
@@ -303,6 +308,24 @@ async def preview_plantuml(request: Request, _auth=Depends(require_api_key)):
     except Exception as exc:
         log.error("PlantUML render error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ── MCP over SSE ─────────────────────────────────────────────────────────────
+
+@app.get("/mcp")
+async def mcp_sse(request: Request, _auth=Depends(require_api_key)):
+    async with _sse.connect_sse(
+        request.scope, request.receive, request._send
+    ) as streams:
+        await mcp_server.run(
+            streams[0], streams[1],
+            mcp_server.create_initialization_options(),
+        )
+
+
+@app.post("/mcp/messages/")
+async def mcp_messages(request: Request, _auth=Depends(require_api_key)):
+    await _sse.handle_post_message(request.scope, request.receive, request._send)
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
