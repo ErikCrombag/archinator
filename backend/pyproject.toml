@@ -30,15 +30,18 @@ dependencies = [
 archinator-server = "archinator.server:main"
 archinator-api = "archinator.api:main"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/archinator"]
-
-[tool.hatch.envs.default]
-dependencies = [
+[project.optional-dependencies]
+dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
     "httpx>=0.28.0",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/archinator"]
+
+[tool.hatch.envs.default]
+features = ["dev"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
