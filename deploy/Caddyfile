@@ -10,7 +10,7 @@ archinator.crombag.me {
         }
         @mcp path /mcp /mcp/messages/*
         handle @mcp {
-            reverse_proxy 100.122.143.53:8000 {
+            reverse_proxy 100.122.143.53:3001 {
                 flush_interval -1
             }
         }
