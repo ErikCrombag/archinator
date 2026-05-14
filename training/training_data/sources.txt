@@ -11,7 +11,8 @@
 # (phase 2). Put the main ArchiMate spec book first.
 
 # ── Primary book (guidance extraction source) ─────────────────────────────────
-# Uncomment and set correct filename once copied to data/books/
+# Books live in training/training_data/books/ (gitignored, copy PDFs there)
+# Docker path /app/data is remapped to training/training_data/ by the training scripts
 /app/data/books/
 
 # ── ArchiMate 3.2 spec chapters (opengroup.org) ───────────────────────────────

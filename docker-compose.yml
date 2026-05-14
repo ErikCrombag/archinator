@@ -14,13 +14,13 @@ services:
       - ./data/chroma:/app/data/chroma
       - ./data/archinator.db:/app/data/archinator.db
       - ./data/semantic_core.md:/app/data/semantic_core.md
-      - ./data/sources.txt:/app/data/sources.txt
-      - ./data/books:/app/data/books
+      - ./training/training_data/sources.txt:/app/data/sources.txt
+      - ./training/training_data/books:/app/data/books
     environment:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama4:16x17b}
       OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-65536}
-      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
+      EMBED_MODEL: ${EMBED_MODEL:-bge-m3}
       DB_PATH: /app/data/archinator.db
       OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}

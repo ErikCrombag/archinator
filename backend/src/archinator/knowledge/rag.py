@@ -8,7 +8,7 @@ import httpx
 _DATA_DIR = Path(__file__).parent.parent.parent.parent.parent / "data"
 _CHROMA_DIR = _DATA_DIR / "chroma"
 _OLLAMA_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-_EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
+_EMBED_MODEL = os.environ.get("EMBED_MODEL", "bge-m3")
 
 
 def _embed(texts: list[str]) -> list[list[float]]:

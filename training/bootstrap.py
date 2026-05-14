@@ -57,16 +57,24 @@ from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 
 console = Console()
-DATA_DIR = Path(__file__).parent.parent / "data"
+_ROOT = Path(__file__).parent.parent
+TRAINING_DATA_DIR = Path(__file__).parent / "training_data"
+DATA_DIR = _ROOT / "data"             # handover artifacts — read by production
 DRAFT_PATH = DATA_DIR / "semantic_core_draft.md"
 FINAL_PATH = DATA_DIR / "semantic_core.md"
 CHROMA_DIR = DATA_DIR / "chroma"
 
-DEFAULT_SOURCES_FILE = Path(__file__).parent.parent / "data" / "sources.txt"
+DEFAULT_SOURCES_FILE = TRAINING_DATA_DIR / "sources.txt"
 
 
-def parse_sources(sources_file: Path) -> tuple[list[Path], list[str]]:
+def parse_sources(
+    sources_file: Path,
+    data_root: Path | None = None,
+) -> tuple[list[Path], list[str]]:
     """Parse sources.txt → (pdf_paths, urls).
+
+    data_root: if set, remaps /app/data paths to this directory (for local runs).
+               Defaults to TRAINING_DATA_DIR.
 
     Handles:
       - Local *.pdf files
@@ -74,6 +82,9 @@ def parse_sources(sources_file: Path) -> tuple[list[Path], list[str]]:
       - https:// URLs ending in .pdf  → remote PDF
       - https:// URLs (other)         → web page
     """
+    if data_root is None:
+        data_root = TRAINING_DATA_DIR
+
     pdf_paths: list[Path] = []
     urls: list[str] = []
 
@@ -88,7 +99,8 @@ def parse_sources(sources_file: Path) -> tuple[list[Path], list[str]]:
         if line.startswith("http://") or line.startswith("https://"):
             urls.append(line)
         else:
-            p = Path(line)
+            remapped = line.replace("/app/data", str(data_root), 1) if line.startswith("/app/data") else line
+            p = Path(remapped)
             if p.is_dir():
                 pdf_paths.extend(sorted(p.glob("*.pdf")))
             elif p.suffix.lower() == ".pdf":
@@ -255,7 +267,7 @@ def build_rag_index(
             shutil.rmtree(_p) if _p.is_dir() else _p.unlink()
 
     embed_base_url = ollama_url
-    embed_model_name = os.environ.get("EMBED_MODEL", "nomic-embed-text")
+    embed_model_name = os.environ.get("EMBED_MODEL", "bge-m3")
 
     def _embed(texts: list[str]) -> list[list[float]]:
         resp = httpx.post(
@@ -300,7 +312,7 @@ def build_rag_index(
         pending_ids.clear()
         pending_meta.clear()
 
-    MAX_CHUNK_CHARS = 2000  # nomic-embed-text context ~8192 tokens; 2000 chars ≈ 500 tokens, safe margin
+    MAX_CHUNK_CHARS = 2000  # bge-m3 context 8192 tokens; 2000 chars ≈ 500 tokens, safe margin
 
     def add_chunk(text: str, meta: dict, key: str) -> None:
         if not text.strip():
