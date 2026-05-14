@@ -263,12 +263,6 @@ def build_rag_index(
     console.print(Panel("[bold]Phase 1: Building RAG index[/bold]", style="cyan"))
     phase1_start = time.time()
 
-    if CHROMA_DIR.exists():
-        console.print(f"[yellow]Removing existing ChromaDB at {CHROMA_DIR}[/yellow]")
-        # rmtree fails on Docker volume mount points (EBUSY) — clear contents instead
-        for _p in CHROMA_DIR.iterdir():
-            shutil.rmtree(_p) if _p.is_dir() else _p.unlink()
-
     embed_base_url = ollama_url
     embed_model_name = os.environ.get("EMBED_MODEL", "bge-m3")
 
@@ -281,7 +275,13 @@ def build_rag_index(
         resp.raise_for_status()
         return resp.json()["embeddings"]
 
+    CHROMA_DIR.mkdir(parents=True, exist_ok=True)
     client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+    try:
+        client.delete_collection(collection_name)
+        console.print(f"[yellow]Dropped existing collection {collection_name!r}[/yellow]")
+    except Exception:
+        pass
     collection = client.get_or_create_collection(
         name=collection_name,
         metadata={"hnsw:space": "cosine", "chunk_words": chunk_words, "overlap_words": overlap_words},
