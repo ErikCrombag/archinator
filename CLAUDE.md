@@ -2,6 +2,28 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Local dev environment
+
+- **Ollama**: running locally at `http://localhost:11434` — no AI server needed for local runs
+- **Training data**: `training/training_data/` — PDFs in `training/training_data/books/` (ArchiMate-Cookbook.pdf, Mastering ArchiMate.pdf)
+- **Path remapping**: sources.txt uses `/app/data` (Docker paths) → bootstrap remaps to `training/training_data/` automatically for local runs
+- **Always use** `--skip-vision` locally (no vision model available); `--ollama-url http://localhost:11434`
+
+```bash
+# Local bootstrap example (index only, no vision, local Ollama)
+python training/bootstrap.py --index-only --skip-vision --ollama-url http://localhost:11434
+
+# Chunk-size sweep (run each, then eval per collection)
+python training/bootstrap.py --index-only --skip-vision --ollama-url http://localhost:11434 --chunk-words 150 --overlap-words 25  --collection-name archimate_spec_c150
+python training/bootstrap.py --index-only --skip-vision --ollama-url http://localhost:11434 --chunk-words 300 --overlap-words 50  --collection-name archimate_spec_c300
+python training/bootstrap.py --index-only --skip-vision --ollama-url http://localhost:11434 --chunk-words 800 --overlap-words 130 --collection-name archimate_spec_c800
+
+python training/eval_embeddings.py --models bge-m3 --ollama-url http://localhost:11434 --source-collection archimate_spec_c150
+python training/eval_embeddings.py --models bge-m3 --ollama-url http://localhost:11434 --source-collection archimate_spec_c300
+python training/eval_embeddings.py --models bge-m3 --ollama-url http://localhost:11434  # default c500
+python training/eval_embeddings.py --models bge-m3 --ollama-url http://localhost:11434 --source-collection archimate_spec_c800
+```
+
 ## Commands
 
 ```bash
@@ -12,19 +34,19 @@ python -m pytest tests/test_validation.py::test_access_behavior_to_passive_passe
 # Render rules_core.md from rules.py (also runs at Docker build time)
 python training/render_rules_md.py
 
-# Bootstrap (one-time setup — requires PDF and Ollama running)
+# Bootstrap (one-time setup — PDFs auto-discovered from sources.txt)
 # Builds ChromaDB RAG index (examples, patterns, guidance) + semantic_core.md
-python training/bootstrap.py --pdf data/archimate_book.pdf --ollama-url http://<AI_SERVER>:11434
-python training/bootstrap.py --pdf data/archimate_book.pdf --index-only     # RAG index only, skip guidance extraction
-python training/bootstrap.py --pdf data/archimate_book.pdf --guidance-only  # guidance only, skip RAG rebuild
-python training/bootstrap.py --pdf data/archimate_book.pdf --skip-review    # non-interactive
+python training/bootstrap.py --ollama-url http://localhost:11434 --skip-vision
+python training/bootstrap.py --index-only --skip-vision             # RAG index only, skip guidance extraction
+python training/bootstrap.py --guidance-only                        # guidance only, skip RAG rebuild
+python training/bootstrap.py --skip-review                          # non-interactive
 
 # Embedding model evaluation (standalone, no backend package needed)
 pip install -r training/requirements.txt
-python training/eval_embeddings.py                                   # default: nomic-embed-text + mxbai-embed-large + hf:BAAI/bge-large-en-v1.5
-python training/eval_embeddings.py --models nomic-embed-text --k 5  # baseline only
-python training/eval_embeddings.py --models all-ollama all-hf       # full sweep
-python training/eval_embeddings.py --rebuild                         # force re-embed
+python training/eval_embeddings.py --ollama-url http://localhost:11434                        # default models, k=[5,10,20,50,100,200]
+python training/eval_embeddings.py --models bge-m3 --ollama-url http://localhost:11434        # bge-m3 only
+python training/eval_embeddings.py --models all-ollama --ollama-url http://localhost:11434    # all Ollama models
+python training/eval_embeddings.py --rebuild                                                  # force re-embed
 
 # Run backend locally (install deps first)
 cd backend && pip install -e .
