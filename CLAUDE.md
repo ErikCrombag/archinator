@@ -266,4 +266,22 @@ Create a migration roadmap for moving a monolithic ERP system to a cloud-native 
 
 ## Open / next session
 
-- Test MCP server behaviour
+### Training pipeline investigation (foundation → detail)
+
+Working through 6 open issues in order. Status:
+
+| # | Topic | Status |
+|---|---|---|
+| 6 | Embedding model quality | ✅ Done — bge-m3 selected (recall@5 0.88) |
+| 1 | Retrieval coverage — k and chunk sizing | ✅ Done — k=10, c500; c800 upgrade path documented |
+| 2 | Vision-derived chunk quality | ⬅ **next** |
+| 3 | Hybrid retrieval (dense + BM25) | pending |
+| 4 | Semantic core selectivity | pending |
+| 5 | Feedback loop / curated diagram store | pending |
+
+### Topic #2 — vision-derived chunk quality
+
+Bootstrap `--skip-vision` is the current local default (no vision model available).  
+Production bootstrap uses `llava:34b` for diagram page descriptions → these chunks go into the RAG index alongside text chunks.  
+Risk: vision model hallucinates element names / relationship directions → pollutes index with false "spec truth".  
+Next session: audit vision-derived chunks in ChromaDB (`kind=diagram` in metadata), assess hallucination rate, decide on mitigation (separate collection + lower weight, confidence filtering, or human review pass).
