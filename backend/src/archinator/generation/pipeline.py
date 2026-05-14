@@ -59,6 +59,8 @@ async def generate(
         "set" if ollama_api_key else "not set",
     )
 
+    log.debug("RAG query result:\n%s", '\n\t'.join(rag_chunks))
+
     system_prompt = build_system_prompt()
     user_prompt = build_generation_prompt(
         query=query,

@@ -171,20 +171,22 @@ def _get_chroma_client(chroma_dir: Path):
     return chromadb.PersistentClient(path=str(chroma_dir))
 
 
-def load_source_chunks(chroma_dir: Path) -> tuple[list[str], list[str], list[dict]]:
-    """Load texts, ids, metadatas from the main archimate_spec collection."""
+def load_source_chunks(
+    chroma_dir: Path, collection_name: str = "archimate_spec"
+) -> tuple[list[str], list[str], list[dict], dict]:
+    """Load texts, ids, metadatas, and collection metadata from a named collection."""
     client = _get_chroma_client(chroma_dir)
     try:
-        col = client.get_collection("archimate_spec")
+        col = client.get_collection(collection_name)
     except Exception:
-        return [], [], []
+        return [], [], [], {}
 
     count = col.count()
     if count == 0:
-        return [], [], []
+        return [], [], [], {}
 
     result = col.get(include=["documents", "metadatas"])
-    return result["documents"], result["ids"], result["metadatas"]
+    return result["documents"], result["ids"], result["metadatas"], col.metadata or {}
 
 
 def get_or_build_eval_collection(
@@ -195,12 +197,14 @@ def get_or_build_eval_collection(
     metadatas: list[dict],
     ollama_url: str,
     rebuild: bool,
+    source_collection: str = "archimate_spec",
 ):
     """Return eval collection for model_spec, building it if needed."""
     import chromadb  # type: ignore
 
     client = _get_chroma_client(chroma_dir)
-    name = f"archimate_spec_eval_{model_slug(model_spec)}"
+    src_slug = model_slug(source_collection)[:20]
+    name = f"eval_{src_slug}_{model_slug(model_spec)}"[:63]
 
     if rebuild:
         try:
@@ -351,7 +355,7 @@ def compute_metrics(ranks: list[int | None], k: int) -> tuple[float, float]:
 @click.command()
 @click.option("--models", multiple=True, default=DEFAULT_MODELS, show_default=True,
               help="Models to evaluate. Use 'all-ollama', 'all-hf', or 'all' as shortcuts.")
-@click.option("--k", "k_values", multiple=True, type=int, default=[5, 10], show_default=True,
+@click.option("--k", "k_values", multiple=True, type=int, default=[5, 10, 20, 50, 100, 200], show_default=True,
               help="k values for recall@k and MRR@k.")
 @click.option("--ollama-url", default="http://localhost:11434", show_default=True)
 @click.option("--ollama-container", default="ollama", show_default=True,
@@ -363,6 +367,8 @@ def compute_metrics(ranks: list[int | None], k: int) -> tuple[float, float]:
 @click.option("--queries", "queries_file", type=click.Path(path_type=Path), default=_QUERIES_FILE, show_default=True)
 @click.option("--rebuild", is_flag=True, default=False, help="Force rebuild of eval collections.")
 @click.option("--no-autopull", is_flag=True, default=False, help="Skip auto-pulling Ollama models.")
+@click.option("--source-collection", default="archimate_spec", show_default=True,
+              help="ChromaDB collection to load source chunks from (matches --collection-name in bootstrap).")
 def main(
     models: tuple[str, ...],
     k_values: tuple[int, ...],
@@ -374,6 +380,7 @@ def main(
     queries_file: Path,
     rebuild: bool,
     no_autopull: bool,
+    source_collection: str,
 ) -> None:
     k_values = sorted(set(k_values))
 
@@ -416,12 +423,17 @@ def main(
     console.print(f"Loaded [bold]{len(queries)}[/bold] queries from {queries_file}")
 
     # ── Load or build source chunks ───────────────────────────────────────────
-    console.print(f"\nLoading chunks from [cyan]{chroma_dir}[/cyan] ...")
-    texts, ids, metadatas = load_source_chunks(chroma_dir)
+    console.print(f"\nLoading chunks from [cyan]{chroma_dir}[/cyan] collection [cyan]{source_collection!r}[/cyan] ...")
+    texts, ids, metadatas, col_meta = load_source_chunks(chroma_dir, source_collection)
+    chunk_words: int = col_meta.get("chunk_words", 0)
+    overlap_words: int = col_meta.get("overlap_words", 0)
+    if chunk_words:
+        console.print(f"  [dim]chunk_words={chunk_words}, overlap_words={overlap_words}[/dim]")
 
     if not texts:
-        console.print("[yellow]archimate_spec collection empty or missing. Falling back to sources.[/yellow]")
+        console.print("[yellow]Collection empty or missing. Falling back to sources.[/yellow]")
         texts, ids, metadatas = build_chunks_from_sources(sources_file, data_root)
+        col_meta = {}
 
     if not texts:
         console.print("[red]No chunks available. Run bootstrap first, or check sources.txt.[/red]")
@@ -448,7 +460,7 @@ def main(
         console.print(f"\n[bold]Model:[/bold] {model_spec}")
         try:
             col = get_or_build_eval_collection(
-                chroma_dir, model_spec, texts, ids, metadatas, ollama_url, rebuild
+                chroma_dir, model_spec, texts, ids, metadatas, ollama_url, rebuild, source_collection
             )
         except Exception as exc:
             console.print(f"  [red]failed to build collection: {exc}[/red]")
@@ -493,6 +505,9 @@ def main(
 
     output = {
         "timestamp": ts,
+        "source_collection": source_collection,
+        "chunk_words": chunk_words or None,
+        "overlap_words": overlap_words or None,
         "queries": len(queries),
         "chunks": len(texts),
         "k_values": list(k_values),

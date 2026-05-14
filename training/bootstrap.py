@@ -249,6 +249,9 @@ def build_rag_index(
     ollama_url: str,
     sources_file: Path | None = None,
     vision_model: str | None = None,
+    chunk_words: int = 500,
+    overlap_words: int = 80,
+    collection_name: str = "archimate_spec",
 ) -> None:
     """
     Chunk and embed all sources from sources_file (PDFs, dirs, URLs).
@@ -280,8 +283,8 @@ def build_rag_index(
 
     client = chromadb.PersistentClient(path=str(CHROMA_DIR))
     collection = client.get_or_create_collection(
-        name="archimate_spec",
-        metadata={"hnsw:space": "cosine"},
+        name=collection_name,
+        metadata={"hnsw:space": "cosine", "chunk_words": chunk_words, "overlap_words": overlap_words},
     )
 
     pending_chunks: list[str] = []
@@ -312,7 +315,7 @@ def build_rag_index(
         pending_ids.clear()
         pending_meta.clear()
 
-    MAX_CHUNK_CHARS = 2000  # bge-m3 context 8192 tokens; 2000 chars ≈ 500 tokens, safe margin
+    MAX_CHUNK_CHARS = max(chunk_words * 6, 2000)  # ~6 chars/word for technical text; bge-m3 8192 token ctx
 
     def add_chunk(text: str, meta: dict, key: str) -> None:
         if not text.strip():
@@ -325,8 +328,8 @@ def build_rag_index(
         if len(pending_chunks) >= 64:
             flush()
 
-    CHUNK_WORDS = 500
-    OVERLAP_WORDS = 80
+    CHUNK_WORDS = chunk_words
+    OVERLAP_WORDS = overlap_words
 
     # ── Additional sources from sources.txt ───────────────────────────────────
     import tempfile
@@ -597,6 +600,12 @@ def review_draft() -> bool:
               help="Only extract guidance; skip RAG index rebuild")
 @click.option("--skip-review", is_flag=True, default=False,
               help="Auto-accept guidance draft without interactive review")
+@click.option("--chunk-words", default=500, show_default=True,
+              help="Words per RAG chunk (affects retrieval granularity)")
+@click.option("--overlap-words", default=80, show_default=True,
+              help="Overlap words between consecutive chunks")
+@click.option("--collection-name", default="archimate_spec", show_default=True,
+              help="ChromaDB collection name — use distinct names per chunk-size sweep")
 def main(
     pdf_path: str | None,
     sources_path: str | None,
@@ -607,6 +616,9 @@ def main(
     index_only: bool,
     guidance_only: bool,
     skip_review: bool,
+    chunk_words: int,
+    overlap_words: int,
+    collection_name: str,
 ) -> None:
     DATA_DIR.mkdir(exist_ok=True)
 
@@ -633,7 +645,7 @@ def main(
             console.print(f"[cyan]Vision model:[/cyan] {effective_vision}")
         else:
             console.print("[yellow]Vision pass disabled (--skip-vision)[/yellow]")
-        build_rag_index(ollama_url, sources, effective_vision)
+        build_rag_index(ollama_url, sources, effective_vision, chunk_words, overlap_words, collection_name)
 
     # ── Phase 2: Guidance extraction ──────────────────────────────────────────
     if not index_only and guidance_pdf:
