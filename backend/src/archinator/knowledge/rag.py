@@ -33,7 +33,7 @@ def _get_collection():  # type: ignore
     )
 
 
-def query(question: str, n_results: int = 5) -> list[str]:
+def query(question: str, n_results: int = 10) -> list[str]:
     """Return top-n relevant spec chunks for the given question."""
     if not _CHROMA_DIR.exists():
         return []

@@ -178,6 +178,24 @@ Evaluated 6 models on 25 ArchiMate-specific queries (min 2 compound term matches
 
 `bge-m3` wins all metrics. Already available via Ollama — no extra infra. Default updated in `rag.py`, `.env.example`, `docker-compose.yml`, `bootstrap.py`. Re-run bootstrap after deploy to rebuild `data/chroma/` with bge-m3 embeddings.
 
+**k=10, chunk_words=500** (2026-05-15)  
+2D sweep across chunk sizes [150, 300, 500, 800] × k [5, 10, 20, 50, 100, 200] using bge-m3 on 25 eval queries:
+
+| chunk_words | chunks | k=5 recall | k=10 recall | k=10 MRR | tokens@k=10 |
+|---|---|---|---|---|---|
+| 150 | 1744 | 0.840 | 0.920 | 0.669 | ~1500 |
+| 300 | 924 | 0.840 | 0.920 | 0.732 | ~3000 |
+| 500 ✓ | 614 | 0.880 | **0.920** | 0.735 | ~5000 |
+| 800 | 453 | 0.880 | **0.920** | **0.760** | ~8000 |
+
+Findings:
+- **Elbow at k=10 for all chunk sizes** — recall@10 = recall@200, no gain beyond k=10. Bumped default from 5→10 in `rag.py`.
+- **Ceiling 0.920** — 8% of queries have no match at any k; content gap in indexed sources, not a retrieval problem.
+- **MRR rises with chunk size** — larger chunks keep concepts together → better embedding specificity → relevant chunks rank higher.
+- **c500 vs c800**: both hit recall 0.920 at k=10. c800 has better MRR (0.760 vs 0.735) but injects ~8000 tokens vs ~5000 per generation. Staying on c500 (current index).
+
+**Upgrade path to c800**: re-run bootstrap with `--chunk-words 800 --overlap-words 130` (no `--collection-name` needed, overwrites default `archimate_spec`). No code changes required — worth testing if generation quality feels shallow on context.
+
 ---
 
 ### Validation rules data (`validation/rules.py`)
