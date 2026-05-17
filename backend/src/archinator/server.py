@@ -1,6 +1,7 @@
 """MCP server — stdio transport."""
 from __future__ import annotations
 import asyncio
+import base64
 import contextlib
 import json
 import logging
@@ -9,7 +10,7 @@ import time
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.server.session import ServerSession
-from mcp.types import Tool, TextContent
+from mcp.types import Tool, TextContent, ImageContent
 
 from .config import settings
 from .models import CompactionMode, OutputFormat
@@ -17,7 +18,12 @@ from .generation import pipeline
 from .validation import validator as val_module
 from .validation.rules import VIEWPOINTS
 from .knowledge import rag as rag_module
+from .formatting.plantuml_render import render as _render_plantuml
 from . import _parse_diagram_input
+
+_IMAGE_FORMATS = {"image_svg", "image_png"}
+_IMAGE_MIME = {"image_svg": "image/svg+xml", "image_png": "image/png"}
+_IMAGE_FMT_ARG = {"image_svg": "svg", "image_png": "png"}
 
 log = logging.getLogger(__name__)
 
@@ -40,9 +46,16 @@ async def list_tools() -> list[Tool]:
                     "query": {"type": "string", "description": "Natural language description of the diagram to generate"},
                     "formats": {
                         "type": "array",
-                        "items": {"type": "string", "enum": ["exchange_xml", "json", "mermaid", "plantuml"]},
+                        "items": {
+                            "type": "string",
+                            "enum": ["exchange_xml", "json", "mermaid", "plantuml", "image_svg", "image_png"],
+                        },
                         "default": ["exchange_xml"],
-                        "description": "Output formats to return",
+                        "description": (
+                            "Output formats to return. image_svg / image_png render the diagram "
+                            "as a visual and are always accompanied by JSON. Include image_svg "
+                            "when the user wants to see the diagram."
+                        ),
                     },
                     "compaction": {
                         "type": "string",
@@ -149,12 +162,25 @@ async def _heartbeat(session: ServerSession, interval: float = 8.0) -> None:
             log.warning("[MCP] heartbeat #%d at t=%.1fs: FAILED %s: %s", n, elapsed, type(exc).__name__, exc)
 
 
-async def _tool_generate(args: dict, session: ServerSession | None = None) -> list[TextContent]:
+async def _tool_generate(args: dict, session: ServerSession | None = None) -> list[TextContent | ImageContent]:
     t0 = time.monotonic()
     log.info("[MCP] _tool_generate START: query=%r session=%s",
              args.get("query", "")[:80], "present" if session else "none")
-    formats = [OutputFormat(f) for f in args.get("formats", ["exchange_xml"])]
+
+    requested = args.get("formats", ["exchange_xml"])
+    image_formats = [f for f in requested if f in _IMAGE_FORMATS]
+    pipeline_formats_raw = [f for f in requested if f not in _IMAGE_FORMATS]
+
+    # Image output requires PlantUML source and JSON result alongside it
+    if image_formats:
+        if "plantuml" not in pipeline_formats_raw:
+            pipeline_formats_raw.append("plantuml")
+        if "json" not in pipeline_formats_raw and "exchange_xml" not in pipeline_formats_raw:
+            pipeline_formats_raw.append("json")
+
+    formats = [OutputFormat(f) for f in pipeline_formats_raw] if pipeline_formats_raw else [OutputFormat("exchange_xml")]
     compaction = CompactionMode(args.get("compaction", "full"))
+
     gen_coro = pipeline.generate(
         query=args["query"],
         formats=formats,
@@ -186,6 +212,7 @@ async def _tool_generate(args: dict, session: ServerSession | None = None) -> li
     else:
         log.debug("[MCP] _tool_generate: no session, awaiting gen_coro directly")
         result = await gen_coro
+
     response: dict = {
         "model_name": result.model.name,
         "valid": result.validation.valid,
@@ -194,7 +221,7 @@ async def _tool_generate(args: dict, session: ServerSession | None = None) -> li
             for v in result.validation.violations
         ],
         "compaction": result.compaction_mode.value,
-        "outputs": result.outputs,
+        "outputs": {k: v for k, v in result.outputs.items() if k != "plantuml" or not image_formats},
     }
     if result.compact_validation:
         response["compact_valid"] = result.compact_validation.valid
@@ -202,7 +229,32 @@ async def _tool_generate(args: dict, session: ServerSession | None = None) -> li
             {"rule": v.rule, "message": v.message, "severity": v.severity}
             for v in result.compact_validation.violations
         ]
-    return [TextContent(type="text", text=json.dumps(response, indent=2, ensure_ascii=False))]
+
+    contents: list[TextContent | ImageContent] = [
+        TextContent(type="text", text=json.dumps(response, indent=2, ensure_ascii=False))
+    ]
+
+    plantuml_source = result.outputs.get("plantuml", "")
+    for img_fmt in image_formats:
+        if not plantuml_source:
+            log.warning("[MCP] image format %s requested but no PlantUML output available", img_fmt)
+            continue
+        fmt_arg = _IMAGE_FMT_ARG[img_fmt]
+        mime = _IMAGE_MIME[img_fmt]
+        log.debug("[MCP] rendering %s via PlantUML JAR=%s", img_fmt, settings.plantuml_jar)
+        try:
+            img_bytes = await _render_plantuml(plantuml_source, fmt_arg, settings.plantuml_jar)
+            contents.append(ImageContent(
+                type="image",
+                data=base64.b64encode(img_bytes).decode("ascii"),
+                mimeType=mime,
+            ))
+            log.info("[MCP] %s rendered OK: %d bytes", img_fmt, len(img_bytes))
+        except Exception as exc:
+            log.error("[MCP] %s render failed: %s", img_fmt, exc)
+            contents.append(TextContent(type="text", text=f"[Image render failed: {exc}]"))
+
+    return contents
 
 
 async def _tool_validate(args: dict) -> list[TextContent]:

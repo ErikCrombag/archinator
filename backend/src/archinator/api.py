@@ -261,31 +261,7 @@ async def revoke_api_key(key_id: int, _auth=Depends(require_api_key)):
 
 # ── PlantUML render — local JAR preferred, kroki.io fallback ─────────────────
 
-async def _render_plantuml_jar(source: str, jar_path: str) -> bytes:
-    """Render PlantUML source to SVG via local JAR (subprocess, async)."""
-    proc = await asyncio.create_subprocess_exec(
-        "java", "-jar", jar_path, "-tsvg", "-pipe", "-charset", "UTF-8",
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(source.encode("utf-8")), timeout=60)
-    if proc.returncode != 0:
-        err = stderr.decode("utf-8", errors="replace").strip()
-        raise RuntimeError(f"PlantUML JAR error (exit {proc.returncode}): {err[:300]}")
-    return stdout
-
-
-async def _render_plantuml_kroki(source: str) -> bytes:
-    """Render PlantUML source to SVG via kroki.io (fallback)."""
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        r = await client.post(
-            "https://kroki.io/plantuml/svg",
-            content=source.encode("utf-8"),
-            headers={"Content-Type": "text/plain"},
-        )
-        r.raise_for_status()
-        return r.content
+from .formatting.plantuml_render import render as _render_plantuml
 
 
 @app.post("/preview/plantuml")
@@ -295,15 +271,10 @@ async def preview_plantuml(request: Request, _auth=Depends(require_api_key)):
         raise HTTPException(status_code=422, detail="Empty diagram source")
 
     jar_path = settings.plantuml_jar
-    use_jar = os.path.isfile(jar_path)
+    log.debug("PlantUML preview: jar=%s", jar_path)
 
     try:
-        if use_jar:
-            log.debug("Rendering PlantUML via local JAR: %s", jar_path)
-            svg = await _render_plantuml_jar(source, jar_path)
-        else:
-            log.debug("PlantUML JAR not found at %s — falling back to kroki.io", jar_path)
-            svg = await _render_plantuml_kroki(source)
+        svg = await _render_plantuml(source, "svg", jar_path)
         return Response(content=svg, media_type="image/svg+xml")
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="PlantUML render timed out")
