@@ -28,7 +28,7 @@ jobs:
         run: python -m pytest tests/ -v -m "not integration"
 
       - name: Verify render_rules_md
-        run: python scripts/render_rules_md.py --output /tmp/rules_core.md
+        run: python training/render_rules_md.py --output /tmp/rules_core.md
 
   # ── Build & push images ─────────────────────────────────────────────────────
   build-and-push:
