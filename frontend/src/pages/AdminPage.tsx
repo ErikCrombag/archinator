@@ -1,6 +1,118 @@
 import React, { useEffect, useState } from 'react';
-import { listApiKeys, createApiKey, revokeApiKey } from '../api';
-import type { ApiKey, CreateKeyResponse } from '../types';
+import { listApiKeys, createApiKey, revokeApiKey, fetchMcpTools } from '../api';
+import { API_URL } from '../config';
+import type { ApiKey, CreateKeyResponse, McpTool } from '../types';
+
+const OUTPUT_DESCRIPTIONS: Record<string, string> = {
+  generate_diagram:
+    'JSON — model_name, valid, violations[], compaction, outputs{format→string}. With compaction: compact_valid, compact_violations[].',
+  validate_diagram:
+    'JSON — valid (boolean), violations[] each with rule, message, severity, element_id, relationship_id.',
+  query_spec:
+    'Plain text — relevant spec excerpts separated by "---".',
+  list_formats:
+    'Plain text — bullet list of format names and descriptions.',
+};
+
+function McpSchemaSection({ tools, apiUrl }: { tools: McpTool[]; apiUrl: string }) {
+  return (
+    <div className="space-y-4">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight text-gray-100">MCP Server</h1>
+        <p className="mt-1 text-sm text-gray-400">
+          Available tools and connection details for MCP clients (Claude Desktop, etc.).
+        </p>
+      </div>
+
+      {/* Endpoints */}
+      <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-6 space-y-4">
+        <h2 className="text-sm font-semibold uppercase tracking-widest text-gray-400">Endpoints</h2>
+        <div className="space-y-3">
+          <div>
+            <p className="mb-1 text-xs font-medium text-gray-400">HTTP / SSE (MCP over HTTP)</p>
+            <code className="block rounded border border-gray-700 bg-gray-950 px-3 py-2 font-mono text-sm text-green-300">
+              {apiUrl}/mcp
+            </code>
+            <p className="mt-1 text-xs text-gray-500">
+              SSE connection: <span className="font-mono">GET {apiUrl}/mcp</span> — requires <span className="font-mono">X-API-Key</span> header.
+              Messages: <span className="font-mono">POST {apiUrl}/mcp/messages/</span>
+            </p>
+          </div>
+          <div>
+            <p className="mb-1 text-xs font-medium text-gray-400">stdio (Claude Desktop / local)</p>
+            <code className="block rounded border border-gray-700 bg-gray-950 px-3 py-2 font-mono text-sm text-green-300">
+              archinator-server
+            </code>
+          </div>
+        </div>
+      </div>
+
+      {/* Tool cards */}
+      {tools.map((tool) => {
+        const props = tool.inputSchema.properties ?? {};
+        const required = new Set(tool.inputSchema.required ?? []);
+        const entries = Object.entries(props);
+        const outputDesc = OUTPUT_DESCRIPTIONS[tool.name] ?? '—';
+        return (
+          <div key={tool.name} className="rounded-lg border border-gray-700 bg-gray-800/50">
+            <div className="border-b border-gray-700 px-6 py-4">
+              <h3 className="font-mono text-sm font-semibold text-indigo-300">{tool.name}</h3>
+              <p className="mt-1 text-sm text-gray-300">{tool.description}</p>
+            </div>
+
+            {entries.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-700 text-xs font-medium uppercase tracking-wider text-gray-500">
+                      <th className="px-6 py-3 text-left">Parameter</th>
+                      <th className="px-6 py-3 text-left">Type</th>
+                      <th className="px-6 py-3 text-left">Required</th>
+                      <th className="px-6 py-3 text-left">Default</th>
+                      <th className="px-6 py-3 text-left">Description</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-700/50">
+                    {entries.map(([name, param]) => {
+                      const typeLabel =
+                        param.type === 'array' && param.items
+                          ? `${param.type}<${param.items.enum ? param.items.enum.join(' | ') : param.items.type}>`
+                          : param.enum
+                          ? param.enum.join(' | ')
+                          : param.type;
+                      const defaultVal =
+                        param.default !== undefined ? String(param.default) : '—';
+                      return (
+                        <tr key={name} className="hover:bg-gray-700/20">
+                          <td className="px-6 py-3 font-mono text-xs text-indigo-200">{name}</td>
+                          <td className="px-6 py-3 font-mono text-xs text-amber-300">{typeLabel}</td>
+                          <td className="px-6 py-3 text-xs">
+                            {required.has(name) ? (
+                              <span className="text-red-400">yes</span>
+                            ) : (
+                              <span className="text-gray-500">no</span>
+                            )}
+                          </td>
+                          <td className="px-6 py-3 font-mono text-xs text-gray-400">{defaultVal}</td>
+                          <td className="px-6 py-3 text-xs text-gray-300">{param.description ?? '—'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div className="border-t border-gray-700 px-6 py-3">
+              <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">Output</span>
+              <p className="mt-1 text-xs text-gray-300">{outputDesc}</p>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export function AdminPage() {
   const [keys, setKeys] = useState<ApiKey[]>([]);
@@ -12,6 +124,7 @@ export function AdminPage() {
   const [copied, setCopied] = useState(false);
   const [revokeConfirm, setRevokeConfirm] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState('');
+  const [mcpTools, setMcpTools] = useState<McpTool[]>([]);
 
   async function loadKeys() {
     setLoadError('');
@@ -25,6 +138,7 @@ export function AdminPage() {
 
   useEffect(() => {
     loadKeys();
+    fetchMcpTools().then((r) => setMcpTools(r.tools)).catch(() => {});
   }, []);
 
   async function handleCreate(e: React.FormEvent) {
@@ -213,6 +327,11 @@ export function AdminPage() {
           </div>
         )}
       </div>
+
+      {/* MCP schema */}
+      {mcpTools.length > 0 && (
+        <McpSchemaSection tools={mcpTools} apiUrl={API_URL} />
+      )}
 
       {/* One-time new key modal */}
       {newKeyResponse && (

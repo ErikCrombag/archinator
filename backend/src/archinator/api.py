@@ -22,7 +22,7 @@ from .knowledge import rag as rag_module
 from .auth import api_keys
 from . import _parse_diagram_input
 from mcp.server.sse import SseServerTransport
-from .server import app as mcp_server
+from .server import app as mcp_server, list_tools as _mcp_list_tools
 
 log = logging.getLogger(__name__)
 
@@ -308,6 +308,19 @@ async def preview_plantuml(request: Request, _auth=Depends(require_api_key)):
     except Exception as exc:
         log.error("PlantUML render error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ── MCP tools schema ─────────────────────────────────────────────────────────
+
+@app.get("/mcp/tools")
+async def mcp_tools(_auth=Depends(require_api_key)):
+    tools = await _mcp_list_tools()
+    return {
+        "tools": [
+            {"name": t.name, "description": t.description, "inputSchema": t.inputSchema}
+            for t in tools
+        ]
+    }
 
 
 # ── MCP over SSE ─────────────────────────────────────────────────────────────

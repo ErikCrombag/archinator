@@ -60,3 +60,27 @@ export interface CreateKeyResponse {
   prefix: string;
   created_at: string;
 }
+
+// ---- MCP tools schema ----
+
+export interface McpToolParam {
+  type: string;
+  description?: string;
+  enum?: string[];
+  default?: unknown;
+  items?: { type: string; enum?: string[] };
+}
+
+export interface McpTool {
+  name: string;
+  description: string;
+  inputSchema: {
+    type: string;
+    required?: string[];
+    properties: Record<string, McpToolParam>;
+  };
+}
+
+export interface McpToolsResponse {
+  tools: McpTool[];
+}

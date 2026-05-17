@@ -6,6 +6,7 @@ import type {
   ListKeysResponse,
   CreateKeyRequest,
   CreateKeyResponse,
+  McpToolsResponse,
 } from './types';
 
 const API_KEY_STORAGE_KEY = 'archinator_api_key';
@@ -83,6 +84,10 @@ export async function createApiKey(
 
 export async function revokeApiKey(id: string): Promise<void> {
   return request<void>(`/admin/keys/${id}`, { method: 'DELETE' });
+}
+
+export async function fetchMcpTools(): Promise<McpToolsResponse> {
+  return request<McpToolsResponse>('/mcp/tools');
 }
 
 export async function previewPlantuml(source: string): Promise<string> {
