@@ -8,7 +8,7 @@ archinator.crombag.me {
         handle /outpost.goauthentik.io/* {
             reverse_proxy authentik-server:9000
         }
-        @mcp path /mcp /mcp/messages/*
+        @mcp path /mcp /mcp/*
         handle @mcp {
             reverse_proxy 100.122.143.53:3001 {
                 flush_interval -1
