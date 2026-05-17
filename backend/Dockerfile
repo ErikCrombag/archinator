@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir .
 # output), so rules_core.md is never shadowed at runtime.
 ENV DATA_DIR=/app/data
 RUN mkdir -p /app/data
-COPY scripts/ /app/scripts/
+COPY training/render_rules_md.py /app/scripts/render_rules_md.py
 RUN python /app/scripts/render_rules_md.py
 # Expected output: /app/data/rules_core.md
 

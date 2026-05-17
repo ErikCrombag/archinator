@@ -2,7 +2,7 @@ services:
   backend:
     image: ghcr.io/${GHCR_OWNER}/archinator-backend:${IMAGE_TAG:-latest}
     build:
-      context: .           # repo root — gives Dockerfile access to scripts/
+      context: .           # repo root — gives Dockerfile access to training/
       dockerfile: backend/Dockerfile
     restart: unless-stopped
     ports:
