@@ -97,15 +97,19 @@ async def list_tools() -> list[Tool]:
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    if name == "generate_diagram":
-        return await _tool_generate(arguments)
-    if name == "validate_diagram":
-        return await _tool_validate(arguments)
-    if name == "query_spec":
-        return await _tool_query_spec(arguments)
-    if name == "list_formats":
-        return _tool_list_formats()
-    return [TextContent(type="text", text=f"Unknown tool: {name}")]
+    try:
+        if name == "generate_diagram":
+            return await _tool_generate(arguments)
+        if name == "validate_diagram":
+            return await _tool_validate(arguments)
+        if name == "query_spec":
+            return await _tool_query_spec(arguments)
+        if name == "list_formats":
+            return _tool_list_formats()
+        return [TextContent(type="text", text=f"Unknown tool: {name}")]
+    except Exception as exc:
+        log.exception("Tool %s failed: %s", name, exc)
+        return [TextContent(type="text", text=f"Error ({type(exc).__name__}): {exc}")]
 
 
 async def _tool_generate(args: dict) -> list[TextContent]:

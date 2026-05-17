@@ -325,6 +325,13 @@ async def mcp_tools(_auth=Depends(require_api_key)):
 
 # ── MCP over SSE ─────────────────────────────────────────────────────────────
 
+class _AsgiHandledResponse(Response):
+    """connect_sse / handle_post_message already sent the ASGI response.
+    Return this so FastAPI does not attempt a second http.response.start."""
+    async def __call__(self, scope, receive, send) -> None:
+        pass
+
+
 @app.get("/mcp")
 async def mcp_sse(request: Request, _auth=Depends(require_api_key)):
     async with _sse.connect_sse(
@@ -334,11 +341,13 @@ async def mcp_sse(request: Request, _auth=Depends(require_api_key)):
             streams[0], streams[1],
             mcp_server.create_initialization_options(),
         )
+    return _AsgiHandledResponse()
 
 
 @app.post("/mcp/messages/")
 async def mcp_messages(request: Request, _auth=Depends(require_api_key)):
     await _sse.handle_post_message(request.scope, request.receive, request._send)
+    return _AsgiHandledResponse()
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
