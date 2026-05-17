@@ -51,15 +51,19 @@ async def generate(
     ollama_num_ctx: int = 65536,
     ollama_api_key: str = "",
 ) -> GenerationResult:
-    rag_chunks = rag.query(query, n_results=5)
+    import time as _time
+    t_pipeline = _time.monotonic()
 
     log.info(
-        "Starting pipeline: url=%s model=%s num_ctx=%d api_key=%s",
-        ollama_base_url, ollama_model, ollama_num_ctx,
+        "[pipeline] START query=%r url=%s model=%s num_ctx=%d api_key=%s",
+        query[:80], ollama_base_url, ollama_model, ollama_num_ctx,
         "set" if ollama_api_key else "not set",
     )
 
-    log.debug("RAG query result:\n%s", '\n\t'.join(rag_chunks))
+    t_rag = _time.monotonic()
+    rag_chunks = rag.query(query, n_results=5)
+    log.info("[pipeline] RAG done in %.2fs — %d chunks retrieved", _time.monotonic() - t_rag, len(rag_chunks))
+    log.debug("[pipeline] RAG chunks:\n%s", '\n\t'.join(rag_chunks))
 
     system_prompt = build_system_prompt()
     user_prompt = build_generation_prompt(
@@ -70,13 +74,17 @@ async def generate(
         refinement_query=refinement_query,
     )
 
-    log.debug("Prompts built (system=%d chars, user=%d chars)", len(system_prompt), len(user_prompt))
+    log.info("[pipeline] prompts built: system=%d chars (~%d tokens), user=%d chars — starting Ollama",
+             len(system_prompt), len(system_prompt) // 4, len(user_prompt))
 
+    t_gen = _time.monotonic()
     model, attempts = await _generate_with_retries(
         system_prompt, user_prompt, ollama_base_url, ollama_model, viewpoint, ollama_num_ctx, ollama_api_key
     )
+    log.info("[pipeline] _generate_with_retries done in %.2fs (%d attempt(s))",
+             _time.monotonic() - t_gen, attempts)
 
-    log.debug('Generated model')
+    log.debug('[pipeline] model parsed')
 
     full_validation = validator.validate(model, viewpoint=viewpoint)
     best_effort = not full_validation.valid
@@ -147,8 +155,11 @@ async def _generate_with_retries(
     best_model: ArchiMateModel | None = None
 
     for attempt in range(1, MAX_RETRIES + 1):
-        log.debug("Generation attempt %d/%d", attempt, MAX_RETRIES)
+        import time as _time
+        t_attempt = _time.monotonic()
+        log.info("[pipeline] attempt %d/%d starting", attempt, MAX_RETRIES)
         raw = await _call_ollama(messages, base_url, model_name, num_ctx, api_key)
+        log.info("[pipeline] attempt %d/%d Ollama returned in %.2fs", attempt, MAX_RETRIES, _time.monotonic() - t_attempt)
 
         # ── Parse ─────────────────────────────────────────────────────────────
         try:
@@ -255,9 +266,10 @@ async def _call_ollama(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    log.debug(
-        "POST %s  model=%s  messages=%d  auth=%s",
-        url, model_name, len(messages),
+    total_msg_chars = sum(len(m.get("content", "")) for m in messages)
+    log.info(
+        "[pipeline] _call_ollama POST %s model=%s messages=%d total_content=%d chars auth=%s",
+        url, model_name, len(messages), total_msg_chars,
         "Bearer ***" if api_key else "none",
     )
 
@@ -265,9 +277,10 @@ async def _call_ollama(
     t0 = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=_timeout) as client:
+            log.debug("[pipeline] _call_ollama: sending POST request to Ollama now")
             r = await client.post(url, json=payload, headers=headers)
             elapsed = time.monotonic() - t0
-            log.debug("Response: status=%d  elapsed=%.1fs", r.status_code, elapsed)
+            log.info("[pipeline] _call_ollama: response headers received status=%d elapsed=%.1fs", r.status_code, elapsed)
             if r.status_code >= 400:
                 log.error(
                     "Ollama error %d from %s — body: %s",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
@@ -340,13 +341,30 @@ class _AsgiHandledResponse(Response):
 
 @app.get("/mcp")
 async def mcp_sse(request: Request, _auth=Depends(require_api_key)):
-    async with _sse.connect_sse(
-        request.scope, request.receive, request._send
-    ) as streams:
-        await mcp_server.run(
-            streams[0], streams[1],
-            mcp_server.create_initialization_options(),
-        )
+    client_ip = (
+        request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        or (request.client.host if request.client else "unknown")
+    )
+    user_agent = request.headers.get("user-agent", "unknown")
+    t0 = time.monotonic()
+    log.info("[MCP] SSE OPEN client=%s ua=%s", client_ip, user_agent)
+    try:
+        async with _sse.connect_sse(
+            request.scope, request.receive, request._send
+        ) as streams:
+            log.debug("[MCP] SSE streams established, entering mcp_server.run() client=%s", client_ip)
+            await mcp_server.run(
+                streams[0], streams[1],
+                mcp_server.create_initialization_options(),
+            )
+            log.debug("[MCP] SSE mcp_server.run() returned normally client=%s", client_ip)
+    except BaseException as exc:
+        log.error("[MCP] SSE mcp_server.run() raised %s: %s  client=%s  elapsed=%.2fs",
+                  type(exc).__name__, exc, client_ip, time.monotonic() - t0)
+        if not isinstance(exc, Exception):
+            raise
+    finally:
+        log.info("[MCP] SSE CLOSE client=%s duration=%.2fs", client_ip, time.monotonic() - t0)
     return _AsgiHandledResponse()
 
 

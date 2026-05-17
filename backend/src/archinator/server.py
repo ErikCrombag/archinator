@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -99,15 +100,21 @@ async def list_tools() -> list[Tool]:
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    t0 = time.monotonic()
+    log.info("[MCP] call_tool ENTER: name=%s", name)
     try:
         session: ServerSession | None = None
         try:
             session = app.request_context.session
+            log.debug("[MCP] call_tool: session acquired session_id=%s", id(session))
         except LookupError:
-            pass  # stdio transport — no session context
+            log.debug("[MCP] call_tool: no session (stdio transport)")
 
         if name == "generate_diagram":
-            return await _tool_generate(arguments, session=session)
+            log.debug("[MCP] call_tool: dispatching to _tool_generate")
+            result = await _tool_generate(arguments, session=session)
+            log.info("[MCP] call_tool EXIT: generate_diagram completed in %.2fs", time.monotonic() - t0)
+            return result
         if name == "validate_diagram":
             return await _tool_validate(arguments)
         if name == "query_spec":
@@ -115,26 +122,37 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         if name == "list_formats":
             return _tool_list_formats()
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
-    except Exception as exc:
-        log.exception("Tool %s failed: %s", name, exc)
+    except BaseException as exc:
+        elapsed = time.monotonic() - t0
+        log.error("[MCP] call_tool EXCEPTION after %.2fs: %s: %s", elapsed, type(exc).__name__, exc)
+        if not isinstance(exc, Exception):
+            raise  # re-raise BaseException (CancelledError etc.)
         return [TextContent(type="text", text=f"Error ({type(exc).__name__}): {exc}")]
 
 
 async def _heartbeat(session: ServerSession, interval: float = 8.0) -> None:
     """Send log notifications while generation runs to keep SSE alive."""
-    messages = [
-        "Retrieving ArchiMate spec context…",
-        "Generating diagram…",
-        "Model still working…",
-        "Validating and formatting…",
-    ]
-    for msg in messages:
+    t_start = time.monotonic()
+    n = 0
+    while True:
         await asyncio.sleep(interval)
-        with contextlib.suppress(Exception):
-            await session.send_log_message("info", msg)
+        n += 1
+        elapsed = time.monotonic() - t_start
+        log.debug("[MCP] heartbeat #%d at t=%.1fs: attempting send_log_message", n, elapsed)
+        try:
+            await session.send_log_message("info", f"Generating… ({elapsed:.0f}s elapsed)")
+            log.debug("[MCP] heartbeat #%d: send_log_message OK", n)
+        except asyncio.CancelledError:
+            log.debug("[MCP] heartbeat #%d: cancelled (generation done)", n)
+            raise
+        except Exception as exc:
+            log.warning("[MCP] heartbeat #%d at t=%.1fs: FAILED %s: %s", n, elapsed, type(exc).__name__, exc)
 
 
 async def _tool_generate(args: dict, session: ServerSession | None = None) -> list[TextContent]:
+    t0 = time.monotonic()
+    log.info("[MCP] _tool_generate START: query=%r session=%s",
+             args.get("query", "")[:80], "present" if session else "none")
     formats = [OutputFormat(f) for f in args.get("formats", ["exchange_xml"])]
     compaction = CompactionMode(args.get("compaction", "full"))
     gen_coro = pipeline.generate(
@@ -150,15 +168,23 @@ async def _tool_generate(args: dict, session: ServerSession | None = None) -> li
         ollama_api_key=settings.ollama_api_key,
     )
     if session is not None:
+        log.debug("[MCP] _tool_generate: creating gen_task + heartbeat_task")
         gen_task = asyncio.create_task(gen_coro)
         hb_task = asyncio.create_task(_heartbeat(session))
         try:
             result = await gen_task
+            log.info("[MCP] _tool_generate: gen_task DONE in %.2fs", time.monotonic() - t0)
+        except BaseException as exc:
+            log.error("[MCP] _tool_generate: gen_task FAILED after %.2fs: %s: %s",
+                      time.monotonic() - t0, type(exc).__name__, exc)
+            raise
         finally:
+            log.debug("[MCP] _tool_generate: cancelling heartbeat_task")
             hb_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await hb_task
     else:
+        log.debug("[MCP] _tool_generate: no session, awaiting gen_coro directly")
         result = await gen_coro
     response: dict = {
         "model_name": result.model.name,
