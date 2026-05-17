@@ -1,11 +1,13 @@
 """MCP server — stdio transport."""
 from __future__ import annotations
 import asyncio
+import contextlib
 import json
 import logging
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
+from mcp.server.session import ServerSession
 from mcp.types import Tool, TextContent
 
 from .config import settings
@@ -98,8 +100,14 @@ async def list_tools() -> list[Tool]:
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     try:
+        session: ServerSession | None = None
+        try:
+            session = app.request_context.session
+        except LookupError:
+            pass  # stdio transport — no session context
+
         if name == "generate_diagram":
-            return await _tool_generate(arguments)
+            return await _tool_generate(arguments, session=session)
         if name == "validate_diagram":
             return await _tool_validate(arguments)
         if name == "query_spec":
@@ -112,10 +120,24 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=f"Error ({type(exc).__name__}): {exc}")]
 
 
-async def _tool_generate(args: dict) -> list[TextContent]:
+async def _heartbeat(session: ServerSession, interval: float = 8.0) -> None:
+    """Send log notifications while generation runs to keep SSE alive."""
+    messages = [
+        "Retrieving ArchiMate spec context…",
+        "Generating diagram…",
+        "Model still working…",
+        "Validating and formatting…",
+    ]
+    for msg in messages:
+        await asyncio.sleep(interval)
+        with contextlib.suppress(Exception):
+            await session.send_log_message("info", msg)
+
+
+async def _tool_generate(args: dict, session: ServerSession | None = None) -> list[TextContent]:
     formats = [OutputFormat(f) for f in args.get("formats", ["exchange_xml"])]
     compaction = CompactionMode(args.get("compaction", "full"))
-    result = await pipeline.generate(
+    gen_coro = pipeline.generate(
         query=args["query"],
         formats=formats,
         compaction=compaction,
@@ -127,6 +149,17 @@ async def _tool_generate(args: dict) -> list[TextContent]:
         ollama_num_ctx=settings.ollama_num_ctx,
         ollama_api_key=settings.ollama_api_key,
     )
+    if session is not None:
+        gen_task = asyncio.create_task(gen_coro)
+        hb_task = asyncio.create_task(_heartbeat(session))
+        try:
+            result = await gen_task
+        finally:
+            hb_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await hb_task
+    else:
+        result = await gen_coro
     response: dict = {
         "model_name": result.model.name,
         "valid": result.validation.valid,
