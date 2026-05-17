@@ -22,7 +22,13 @@ from .knowledge import rag as rag_module
 from .auth import api_keys
 from . import _parse_diagram_input
 from mcp.server.sse import SseServerTransport
+from sse_starlette.sse import EventSourceResponse as _EventSourceResponse
 from .server import app as mcp_server, list_tools as _mcp_list_tools
+
+# Default is 15 s — matches the MCP client's read timeout exactly, causing a
+# race where the client gives up and reconnects before the ping arrives.
+# 3 s keeps the SSE alive comfortably through long LLM generation runs.
+_EventSourceResponse.DEFAULT_PING_INTERVAL = 3
 
 log = logging.getLogger(__name__)
 
